@@ -74,7 +74,13 @@ static void editor_draw_sidebar(struct editor *ed)
 		int max_rows = (int)(sizeof(ed->sidebar_row_to_id) /
 				     sizeof(ed->sidebar_row_to_id[0]));
 
-		if (b->id == ed->bboxes.selected) {
+		/*
+		 * NOTE: bbox_manager::selected is an INDEX into
+		 * boxes[], not a bbox id (see bbox.c — every
+		 * mutation site treats it as an index).
+		 * Compare against `i`, not `b->id`.
+		 */
+		if (i == ed->bboxes.selected) {
 			fg = TB_BLACK;
 			bg = TB_YELLOW;
 		}
@@ -140,7 +146,8 @@ static void editor_draw_bbox_overlay(struct editor *ed)
 
 	for (i = 0; i < ed->bboxes.count; i++) {
 		struct bbox *b = &ed->bboxes.boxes[i];
-		int is_sel = (b->id == ed->bboxes.selected);
+		/* selected is an array index, not an id. */
+		int is_sel = (i == ed->bboxes.selected);
 		uintattr_t fg = is_sel
 			? (TB_YELLOW | TB_BOLD)
 			: TB_GREEN;
@@ -349,18 +356,16 @@ static void editor_redraw_status_bar_fast(struct editor *ed)
 	editor_draw_bbox_overlay(ed);
 
 	/*
-	 * Wrap with synchronized output so cell diffs flush as
-	 * one frame; do NOT re-transmit the image data, since
-	 * none of the image pixels changed (only the status bar
-	 * was edited). After the prior full render, both the
-	 * Kitty/iTerm2 placement and termbox front buffer are
-	 * already in the desired state for the image region —
-	 * tb_present below will only emit cell diffs for the
-	 * 3 status bar rows, leaving the image untouched.
+	 * Plain tb_present here: only a few dozen cell diffs
+	 * (status bar + sidebar label + maybe the live label
+	 * inside the sidebar) get sent. Avoid wrapping with
+	 * the synchronized-output sequence (BSU/ESU) — for a
+	 * tiny diff like this it adds an extra round trip and
+	 * can make typing feel laggy without any tearing
+	 * benefit. The image was uploaded once already and is
+	 * not part of this frame's output.
 	 */
-	tb_send("\033[?2026h", 8);
 	tb_present();
-	tb_send("\033[?2026l", 8);
 
 	ed->render.dirty = 0;
 }
@@ -498,13 +503,19 @@ static void editor_do_render(struct editor *ed)
 			(term_w != ed->last_term_w) ||
 			(term_h != ed->last_term_h);
 
-		tb_send("\033[?2026h", 8);
-
 		if (need_image_upload) {
 			/*
 			 * Full upload path: status bar first, then
-			 * image data, then bbox overlay.
+			 * image data, then bbox overlay. Wrap the
+			 * heavy pixel transmission in DEC 2026
+			 * synchronized output so the terminal only
+			 * composites once at the end. For the pure
+			 * overlay path below we skip BSU/ESU — those
+			 * frames are tiny cell diffs and the extra
+			 * round-trip just adds latency (visible when
+			 * clicking sidebar rows).
 			 */
+			tb_send("\033[?2026h", 8);
 			tb_present();
 
 			tb_send("\033[H", 3);
@@ -585,6 +596,8 @@ static void editor_do_render(struct editor *ed)
 			ed->last_uploaded_gen = ed->image_gen;
 			ed->last_term_w = term_w;
 			ed->last_term_h = term_h;
+
+			tb_send("\033[?2026l", 8);
 		}
 
 		/*
@@ -592,11 +605,10 @@ static void editor_do_render(struct editor *ed)
 		 * cells. tb_present below will only emit cell
 		 * diffs (the few cells that changed since the
 		 * last frame), leaving the graphics layer alone.
+		 * No BSU/ESU here — see comment above.
 		 */
 		editor_draw_bbox_overlay(ed);
 		tb_present();
-
-		tb_send("\033[?2026l", 8);
 	}
 
 	(void)x;
@@ -767,36 +779,45 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 					  sizeof(ed->sidebar_row_to_id[0]))) {
 				int hit_id = ed->sidebar_row_to_id[ev->y];
 
+				/*
+				 * Sidebar click is a *pure selection*
+				 * gesture: just update `selected` and
+				 * stay in VIEW. Do not push history,
+				 * do not auto-enter LABEL_EDIT — both
+				 * add visible latency to what should
+				 * be a near-instant select. Press 'e'
+				 * afterwards to edit the label.
+				 *
+				 * NOTE: bbox_manager::selected is an
+				 * INDEX into boxes[], not a bbox id.
+				 * sidebar_row_to_id stores ids, so we
+				 * must translate id -> index here.
+				 * Without this, bbox_get_selected()
+				 * returns the wrong bbox (or NULL),
+				 * which made shortcuts like 'e' / 'd'
+				 * silently fail after a sidebar click.
+				 */
 				if (hit_id >= 0) {
-					struct bbox *sel;
+					int k;
 
-					ed->bboxes.selected = hit_id;
-
-					/*
-					 * Sidebar click is a "select +
-					 * jump to edit label" gesture:
-					 * once a row is picked, drop the
-					 * user straight into LABEL_EDIT
-					 * so they can rename the bbox
-					 * without an extra 'e' press.
-					 */
-					sel = bbox_get_selected(&ed->bboxes);
-					if (sel) {
-						editor_push_history(ed,
-							OP_EDIT_LABEL);
-						ed->mode = MODE_LABEL_EDIT;
-						ed->label_target_id = sel->id;
-						strncpy(ed->label_buf,
-							sel->label,
-							BBOX_LABEL_MAX - 1);
-						ed->label_buf[BBOX_LABEL_MAX
-							- 1] = '\0';
-						ed->label_len = (int)strlen(
-							ed->label_buf);
-					} else {
-						ed->mode = MODE_VIEW;
+					for (k = 0; k < ed->bboxes.count;
+					     k++) {
+						if (ed->bboxes.boxes[k].id ==
+						    hit_id) {
+							if (ed->bboxes
+								.selected !=
+							    k) {
+								ed->bboxes
+								    .selected =
+									k;
+								ed->mode =
+								    MODE_VIEW;
+								ed->render
+								    .dirty = 1;
+							}
+							break;
+						}
 					}
-					ed->render.dirty = 1;
 				}
 			}
 			return;
@@ -865,8 +886,16 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 					 * Just created a new bbox: jump
 					 * straight into label-edit mode
 					 * so the user can type a label.
+					 *
+					 * NOTE: bbox_add() (called from
+					 * bbox_mouse_up) already sets
+					 * selected = count - 1, which is
+					 * the correct *index*. Do NOT
+					 * overwrite it with `id` here —
+					 * `selected` is an index, not an
+					 * id, so writing the id corrupts
+					 * subsequent bbox_get_selected().
 					 */
-					ed->bboxes.selected = id;
 					editor_push_history(ed,
 						OP_EDIT_LABEL);
 					ed->mode = MODE_LABEL_EDIT;
@@ -933,16 +962,27 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 			if (ed->label_len > 0) {
 				/*
 				 * Delete one UTF-8 codepoint, not just
-				 * one byte: walk back over continuation
-				 * bytes (10xxxxxx) until the leading byte.
+				 * one byte. Forward-scan label_buf to
+				 * find the last codepoint boundary:
+				 * a UTF-8 leading byte is anything that
+				 * is NOT a continuation byte (10xxxxxx).
+				 * Truncate at the last leading byte.
+				 *
+				 * This is robust against any byte
+				 * sequence in the buffer, including
+				 * malformed input — we always trim down
+				 * to the previous codepoint start.
 				 */
-				int i = ed->label_len - 1;
+				int last_start = 0;
+				int j;
 
-				while (i > 0 &&
-				       ((unsigned char)ed->label_buf[i] &
-					0xC0) == 0x80)
-					i--;
-				ed->label_len = i;
+				for (j = 0; j < ed->label_len; j++) {
+					unsigned char c =
+						(unsigned char)ed->label_buf[j];
+					if ((c & 0xC0) != 0x80)
+						last_start = j;
+				}
+				ed->label_len = last_start;
 				ed->label_buf[ed->label_len] = '\0';
 				ed->render.dirty = 1;
 			}
@@ -1397,10 +1437,21 @@ int editor_run(struct editor *ed)
 		struct tb_event ev;
 		int nev;
 		long long now;
+		int wait_ms;
+
+		/*
+		 * In LABEL_EDIT we want zero-latency typing: block
+		 * indefinitely until a key arrives, then drain the
+		 * rest of the burst non-blocking and render once.
+		 * In other modes we keep the 30ms tick for animation
+		 * and external state changes.
+		 */
+		wait_ms = (ed->mode == MODE_LABEL_EDIT) ? -1 : 30;
 
 		/* Drain all pending events before rendering */
 		for (nev = 0; nev < 64; nev++) {
-			ret = tb_peek_event(&ev, nev == 0 ? 30 : 0);
+			ret = tb_peek_event(&ev,
+				nev == 0 ? wait_ms : 0);
 			if (ret != TB_OK)
 				break;
 			editor_handle_event(ed, &ev);
