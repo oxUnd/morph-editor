@@ -18,6 +18,40 @@ static int query_kitty_support(void)
 	env = getenv("TERM_PROGRAM");
 	if (env && strcmp(env, "kitty") == 0)
 		return 1;
+	/*
+	 * iTerm2 3.5+ implements the Kitty graphics protocol,
+	 * so route it through the same Kitty path. This avoids
+	 * maintaining a second image transport (the old iTerm2
+	 * inline OSC-1337 protocol) and gives iTerm2 the same
+	 * chunked upload + placement-replace behavior, which
+	 * is what makes Kitty rendering smooth.
+	 *
+	 * Detection: iTerm2 sets TERM_PROGRAM=iTerm.app and
+	 * exports LC_TERMINAL_VERSION (e.g. "3.5.10"). Anything
+	 * with major>=4 or major==3 && minor>=5 is assumed to
+	 * speak Kitty graphics. Older iTerm2 falls back to the
+	 * legacy inline path below.
+	 */
+	{
+		const char *prog = getenv("TERM_PROGRAM");
+		const char *ver = getenv("LC_TERMINAL_VERSION");
+		const char *lc = getenv("LC_TERMINAL");
+
+		if ((prog && strcmp(prog, "iTerm.app") == 0) ||
+		    (lc && strcmp(lc, "iTerm2") == 0)) {
+			if (ver && ver[0]) {
+				int major = atoi(ver);
+				int minor = 0;
+				const char *dot = strchr(ver, '.');
+
+				if (dot)
+					minor = atoi(dot + 1);
+				if (major > 3 ||
+				    (major == 3 && minor >= 5))
+					return 1;
+			}
+		}
+	}
 	return 0;
 }
 

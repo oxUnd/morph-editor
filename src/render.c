@@ -47,19 +47,33 @@ void render_calc_fit(struct render_state *rs, int img_w, int img_h,
 		     int term_w, int term_h)
 {
 	float scale_x, scale_y;
+	int avail_w;
 
 	/* Reserve 3 rows for status bar */
 	term_h -= 3;
 
+	/*
+	 * Reserve a right-hand sidebar that lists bbox info,
+	 * but only when the terminal is wide enough that the
+	 * remaining image area is still usable.
+	 */
+	avail_w = term_w;
+	if (term_w >= 60) {
+		avail_w = term_w - SIDEBAR_W;
+		rs->sidebar_w = SIDEBAR_W;
+	} else {
+		rs->sidebar_w = 0;
+	}
+
 	/* Each terminal cell is 2 pixel rows tall */
-	scale_x = (float)term_w / img_w;
+	scale_x = (float)avail_w / img_w;
 	scale_y = (float)(term_h * 2) / img_h;
 	rs->scale = MIN(scale_x, scale_y);
 
 	rs->img_display_w = (int)(img_w * rs->scale);
 	rs->img_display_h = (int)(img_h * rs->scale);
 
-	rs->offset_x = (term_w - rs->img_display_w) / 2;
+	rs->offset_x = (avail_w - rs->img_display_w) / 2;
 	rs->offset_y = 0;
 
 	rs->term_w = term_w;
@@ -650,8 +664,26 @@ char *render_image_kitty(struct arena *a, const unsigned char *pixels,
 		m = (remaining > chunk_size) ? 1 : 0;
 
 		if (offset == 0) {
+			/*
+			 * z=-1 places the image *below* the text
+			 * cell layer. Without it (default z=0),
+			 * Kitty draws the image above text cells,
+			 * which hides termbox-drawn overlays such
+			 * as bbox outlines and the rubber-band
+			 * rectangle.
+			 *
+			 * Side effect: at z=-1 the default-
+			 * background cells sit on top of the
+			 * image, which can make blank space look
+			 * like it's covering the picture. The
+			 * editor mitigates this by only writing
+			 * cells that have actual overlay content
+			 * (bbox edges, status bar, sidebar) so
+			 * the rest of the image area shows
+			 * through.
+			 */
 			header_len = snprintf(header, sizeof(header),
-				"\033_Ga=T,f=100,s=%d,v=%d,c=%d,r=%d,i=%d,q=2,m=%d;",
+				"\033_Ga=T,f=100,s=%d,v=%d,c=%d,r=%d,z=-1,i=%d,q=2,m=%d;",
 				w, h, disp_cols, disp_rows,
 				placement_id, m);
 		} else {

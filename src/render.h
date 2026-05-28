@@ -7,6 +7,8 @@
 #include "image.h"
 #include "bbox.h"
 
+#define SIDEBAR_W 32
+
 struct render_state {
 	enum term_proto proto;
 	int term_w;
@@ -18,6 +20,7 @@ struct render_state {
 	float scale;
 	int kitty_placement_id;
 	int dirty;
+	int sidebar_w;
 };
 
 void render_init(struct render_state *rs, enum term_proto proto);

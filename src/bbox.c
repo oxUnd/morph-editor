@@ -106,16 +106,54 @@ int bbox_hit_handle(struct bbox *b, int px, int py, int handle_size)
 	return HANDLE_NONE;
 }
 
-void bbox_mouse_down(struct bbox_manager *bm, int px, int py)
+void bbox_mouse_down(struct bbox_manager *bm, int px, int py,
+		     int button)
 {
 	int idx;
 	struct bbox *b;
 	int handle;
 
-	if (bm->selected >= 0 && bm->selected < bm->count) {
-		b = &bm->boxes[bm->selected];
-		handle = bbox_hit_handle(b, px, py, 8);
-		if (handle == HANDLE_BODY) {
+	if (button == BBOX_BTN_SECONDARY) {
+		/*
+		 * Right-button: select / move / resize an existing
+		 * bbox. If the click misses every bbox, do nothing
+		 * (no drag started).
+		 */
+		if (bm->selected >= 0 && bm->selected < bm->count) {
+			b = &bm->boxes[bm->selected];
+			handle = bbox_hit_handle(b, px, py, 8);
+			if (handle == HANDLE_BODY) {
+				bm->drag_state = DRAG_MOVE;
+				bm->start_x = px;
+				bm->start_y = py;
+				bm->cur_x = px;
+				bm->cur_y = py;
+				bm->orig_x = b->x;
+				bm->orig_y = b->y;
+				bm->orig_w = b->w;
+				bm->orig_h = b->h;
+				return;
+			}
+			if (handle >= HANDLE_TL &&
+			    handle <= HANDLE_BR) {
+				bm->drag_state = DRAG_RESIZE;
+				bm->drag_handle = handle;
+				bm->start_x = px;
+				bm->start_y = py;
+				bm->cur_x = px;
+				bm->cur_y = py;
+				bm->orig_x = b->x;
+				bm->orig_y = b->y;
+				bm->orig_w = b->w;
+				bm->orig_h = b->h;
+				return;
+			}
+		}
+
+		idx = bbox_find_at(bm, px, py);
+		if (idx >= 0) {
+			bm->selected = idx;
+			b = &bm->boxes[idx];
 			bm->drag_state = DRAG_MOVE;
 			bm->start_x = px;
 			bm->start_y = py;
@@ -127,37 +165,15 @@ void bbox_mouse_down(struct bbox_manager *bm, int px, int py)
 			bm->orig_h = b->h;
 			return;
 		}
-		if (handle >= HANDLE_TL && handle <= HANDLE_BR) {
-			bm->drag_state = DRAG_RESIZE;
-			bm->drag_handle = handle;
-			bm->start_x = px;
-			bm->start_y = py;
-			bm->cur_x = px;
-			bm->cur_y = py;
-			bm->orig_x = b->x;
-			bm->orig_y = b->y;
-			bm->orig_w = b->w;
-			bm->orig_h = b->h;
-			return;
-		}
-	}
-
-	idx = bbox_find_at(bm, px, py);
-	if (idx >= 0) {
-		bm->selected = idx;
-		b = &bm->boxes[idx];
-		bm->drag_state = DRAG_MOVE;
-		bm->start_x = px;
-		bm->start_y = py;
-		bm->cur_x = px;
-		bm->cur_y = py;
-		bm->orig_x = b->x;
-		bm->orig_y = b->y;
-		bm->orig_w = b->w;
-		bm->orig_h = b->h;
 		return;
 	}
 
+	/*
+	 * Left-button: always start a fresh "create" drag,
+	 * regardless of whether the press lands inside an
+	 * existing bbox. Use the right button to manipulate
+	 * existing bboxes.
+	 */
 	bm->drag_state = DRAG_CREATE;
 	bm->start_x = px;
 	bm->start_y = py;

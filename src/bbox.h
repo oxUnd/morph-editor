@@ -65,9 +65,22 @@ int bbox_find_at(struct bbox_manager *bm, int px, int py);
 int bbox_hit_handle(struct bbox *b, int px, int py, int handle_size);
 
 /*
- * bbox_mouse_down - handle mouse press at pixel coordinates
+ * bbox_mouse_down - handle mouse press at pixel coordinates.
+ *
+ * `button` selects the interaction:
+ *   BBOX_BTN_PRIMARY (left): always start creating a new bbox.
+ *   BBOX_BTN_SECONDARY (right): try to select / move / resize an
+ *       existing bbox. Falls through to nothing if no hit.
+ *
+ * Splitting left and right resolves the conflict between
+ * "draw new" and "select existing" when both used the same
+ * left button.
  */
-void bbox_mouse_down(struct bbox_manager *bm, int px, int py);
+#define BBOX_BTN_PRIMARY    1
+#define BBOX_BTN_SECONDARY  2
+
+void bbox_mouse_down(struct bbox_manager *bm, int px, int py,
+		     int button);
 
 /*
  * bbox_mouse_move - handle mouse drag at pixel coordinates
