@@ -725,7 +725,12 @@ static void editor_push_history(struct editor *ed, enum op_type type)
 		history_push(&ed->history, type, snap);
 }
 
-static void editor_save(struct editor *ed)
+/*
+ * Build the bbox-snapshot JSON used by both the 's' (save)
+ * shortcut and the on-quit dump. Caller owns the returned
+ * buffer and must free() it.
+ */
+static char *editor_dump_json(struct editor *ed)
 {
 	cJSON *root;
 	cJSON *bboxes_arr;
@@ -744,9 +749,37 @@ static void editor_save(struct editor *ed)
 	cJSON_AddItemToObject(root, "bboxes", bboxes_arr);
 
 	result = cJSON_PrintUnformatted(root);
-	fprintf(stderr, "%s\n", result);
-	free(result);
 	cJSON_Delete(root);
+	return result;
+}
+
+static void editor_save(struct editor *ed)
+{
+	char *result;
+
+	result = editor_dump_json(ed);
+	if (result) {
+		fprintf(stderr, "%s\n", result);
+		free(result);
+	}
+}
+
+/*
+ * Print the final bbox snapshot to stdout on clean exit so
+ * downstream tools (shells, agents) can pipe-consume the
+ * annotation result. Goes to stdout (not stderr) because
+ * stderr is used for runtime/debug logs.
+ */
+static void editor_dump_on_quit(struct editor *ed)
+{
+	char *result;
+
+	result = editor_dump_json(ed);
+	if (result) {
+		fprintf(stdout, "%s\n", result);
+		fflush(stdout);
+		free(result);
+	}
 }
 
 void editor_handle_event(struct editor *ed, struct tb_event *ev)
@@ -1486,6 +1519,15 @@ int editor_run(struct editor *ed)
 	}
 
 	tb_shutdown();
+
+	/*
+	 * After leaving the alt-screen / raw mode we can safely
+	 * write the final bbox snapshot to stdout. This makes
+	 * morph-editor pipe-friendly: callers can capture the
+	 * annotation result without having to press 's' first.
+	 */
+	editor_dump_on_quit(ed);
+
 	return 0;
 }
 
