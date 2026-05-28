@@ -585,7 +585,17 @@ echo '{"jsonrpc":"2.0","id":1,"method":"video/setFrame","params":{"frame":30}}' 
 | 问题 | 方案 |
 |------|------|
 | Sixel 下叠加 BBox | 整帧重绘（编辑操作非高频，性能可接受） |
-| Kitty 下叠加 BBox | placement id 删除重绘 |
+| Kitty/iTerm2 下叠加 BBox | 分层渲染：图片在图形层（z=-1），框在 termbox cell overlay 层；非首次只发 cell diff |
+| iTerm2 ≥ 3.5 复用 Kitty | 终端检测合并到 Kitty 通道，单一编码路径 |
+| 图片偏小/模糊 | Kitty header 加 `c=cols, r=rows` 让终端按字符栅格缩放，发送原始像素而非预缩放 |
+| 打开后误退出 | Kitty header 加 `q=2` 静默 OK 应答，避免被读回当作 ESC |
+| 画框 / 选中冲突 | 鼠标左右键分工：左键画新框，右键选中/移动/缩放 |
+| 全图重传卡顿 | `image_gen` 版本号判定是否需要重传图片，overlay-only 帧只走 cell diff |
+| 闪烁 | 图片重传路径包 DEC 2026 BSU/ESU；overlay-only 帧不包，避免 round-trip 延迟 |
+| LABEL_EDIT 输入卡顿 | LABEL_EDIT 模式 `tb_poll_event(-1)` 阻塞等待，不做 30ms tick；fast redraw 路径只刷状态栏 + 侧边栏 + overlay，不重传图片 |
+| 中文 / UTF-8 输入 | termbox2 的 `ev->ch` 是 codepoint，按 UTF-8 编码写入 `label_buf`；Backspace 前向扫描定位最后一个 UTF-8 leading byte，按 codepoint 删除 |
+| 侧边栏 / 状态栏 label 同步 | LABEL_EDIT 模式下，侧边栏目标行展示 `label_buf` 实时值，commit 后才落盘到 `bbox->label` |
+| selected 语义混淆 | 全程统一为 boxes[] 数组下标；侧边栏 row→id→index 显式转换 |
 | JSON-RPC 与 TUI 事件共存 | libuv uv_poll_t 统一监听 tty fd + stdin |
 | FFmpeg 非阻塞 | libuv uv_process_t + uv_pipe_t 异步管道 |
 | 帧缓存 | LRU 32 帧，PNG 压缩格式缓存，命中时 stb_image 解码 |
