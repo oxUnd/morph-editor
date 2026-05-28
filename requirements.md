@@ -169,28 +169,53 @@ libuv event loop
 **编辑器状态机：**
 
 ```
-VIEW ──鼠标按下──→ SELECT ──释放──→ CONFIRM ──Enter──→ VIEW
-  ↑                                   │
-  └──────────── Esc 取消 ─────────────┘
+VIEW ──L 拖拽──→ SELECT ──释放──→ LABEL_EDIT ──Enter──→ VIEW
+  │                                  │
+  │                                  └─Esc─→ VIEW（不提交 label）
+  │
+  ├─R 拖拽──→ SELECT ──释放──→ CONFIRM ──Enter──→ VIEW
+  │
+  ├─侧边栏点击──→ VIEW（仅更新 selected，不进入 LABEL_EDIT）
+  │
+  └─e（已选中 bbox）──→ LABEL_EDIT
 ```
+
+- `VIEW`：浏览/选中态，等待输入
+- `SELECT`：鼠标拖拽中，实时更新框
+- `CONFIRM`：右键移动/缩放后等待 Enter 确认或 Esc 撤销
+- `LABEL_EDIT`：输入框聚焦，捕获键入到 `label_buf`（UTF-8 编码，
+  支持中文等多字节字符；Backspace 按 codepoint 删除）
+
+**鼠标按键分工：**
+
+| 按键 | 功能 |
+|------|------|
+| 左键拖拽 | 画新框（不会误选已有框） |
+| 右键拖拽 | 选中/移动/缩放已有框（命中 handle 走 resize，命中框体走 move） |
+| 左键点击侧边栏 | 选中对应 bbox（纯选择，不进入编辑） |
 
 **UI 布局：**
 
 ```
-┌──────────────────────────────────────────┐
-│                                          │
-│         [图片区域 - Sixel/Kitty]          │
-│                                          │
-│    ┌──── BBox 1: "cat" ───┐             │
-│    │                       │             │
-│    └───────────────────────┘             │
-│                                          │
-├──────────────────────────────────────────┤
-│ image.jpg [640x480] | Frame: 30/300     │
-│ BBox: 2 | Mode: SELECT | Undo: 3        │
-│ [s]ave [d]elete [u]ndo [tab] [q]uit     │
-└──────────────────────────────────────────┘
+┌──────────────────────────────────┬──────────────────────┐
+│                                  │ BBoxes (click to     │
+│       [图片区域 - Kitty/Sixel]    │       select)        │
+│                                  │ ────────────────     │
+│    ┌──── BBox 1: "cat" ───┐     │  #1  120x80 @20,30   │
+│    │                       │     │   L: cat             │
+│    └───────────────────────┘     │  #2  60x40 @300,200  │
+│                                  │   L: dog             │
+│                                  │ ...                  │
+├──────────────────────────────────┴──────────────────────┤
+│ image.jpg [640x480] | Frame: 30/300                     │
+│ BBox: 2 | Mode: LABEL_EDIT | Undo: 3 | Label: cat_      │
+│ [s]ave [d]elete [u]ndo [r]edo [e]dit-label [tab] [q]uit │
+└──────────────────────────────────────────────────────────┘
 ```
+
+- 右侧栏宽度自适应，列出每个 bbox 的 `id / size / label`
+- 当前选中行高亮（黄底黑字）
+- LABEL_EDIT 模式下，目标行的 label 实时显示输入缓冲（与状态栏同步）
 
 **快捷键：**
 
@@ -202,10 +227,15 @@ VIEW ──鼠标按下──→ SELECT ──释放──→ CONFIRM ──Ente
 | Tab | 切换选中 BBox |
 | u | Undo |
 | r | Redo |
+| e | 进入 LABEL_EDIT，编辑当前选中 bbox 的标签 |
+| h/j/k/l | 调整选中框尺寸（左/下/上/右） |
+| a | 在图片中心添加 1/4 大小的默认框 |
 | +/- | 视频帧步进 |
 | ←/→ | 视频逐帧 |
 | Space | 视频播放/暂停 |
 | [ / ] | 视频跳帧 |
+| Enter | LABEL_EDIT 提交 / CONFIRM 接受 |
+| Esc | 退回 VIEW（取消 LABEL_EDIT） |
 
 ### 6.3 render.c — 图片渲染
 
