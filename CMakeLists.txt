@@ -31,6 +31,8 @@ add_executable(morph-editor
 	src/history.c
 	src/terminal.c
 	src/json_util.c
+	src/layout.c
+	src/arrow.c
 	src/util.c
 	vendor/cJSON.c
 	vendor/termbox2_impl.c
@@ -72,6 +74,8 @@ set(TEST_LIB_SOURCES
 	src/transform.c
 	src/history.c
 	src/json_util.c
+	src/layout.c
+	src/arrow.c
 	src/util.c
 	src/terminal.c
 	vendor/cJSON.c

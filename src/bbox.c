@@ -17,7 +17,7 @@ void bbox_manager_init(struct bbox_manager *bm)
 }
 
 int bbox_add(struct bbox_manager *bm, int x, int y, int w, int h,
-	     const char *label, uint32_t color)
+	     int image_index, const char *label, uint32_t color)
 {
 	struct bbox *b;
 
@@ -30,6 +30,7 @@ int bbox_add(struct bbox_manager *bm, int x, int y, int w, int h,
 	b->y = y;
 	b->w = w;
 	b->h = h;
+	b->image_index = image_index;
 	b->id = bm->next_id++;
 	b->color = color ? color :
 		   default_colors[bm->count % ARRAY_SIZE(default_colors)];
@@ -246,7 +247,7 @@ int bbox_mouse_up(struct bbox_manager *bm)
 			return -1;
 		}
 
-		id = bbox_add(bm, x, y, w, h, NULL, 0);
+		id = bbox_add(bm, x, y, w, h, 0, NULL, 0);
 		bm->drag_state = DRAG_NONE;
 		return id;
 	}

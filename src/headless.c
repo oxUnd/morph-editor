@@ -59,7 +59,7 @@ int headless_annotate(struct arena *a, const char *path,
 			fprintf(stderr, "error: invalid bbox format\n");
 			return -1;
 		}
-		id = bbox_add(&bm, x, y, w, h,
+		id = bbox_add(&bm, x, y, w, h, 0,
 			      args->label ? args->label : "", 0);
 		if (id < 0) {
 			fprintf(stderr, "error: cannot add bbox\n");
@@ -124,7 +124,7 @@ int headless_mask(struct arena *a, const char *path,
 			fprintf(stderr, "error: invalid bbox format\n");
 			return -1;
 		}
-		bbox_add(&bm, x, y, w, h, "", 0);
+		bbox_add(&bm, x, y, w, h, 0, "", 0);
 	}
 
 	opts.feather = args->feather_str ? atoi(args->feather_str) : 0;

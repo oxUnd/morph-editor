@@ -3,9 +3,12 @@
 
 #include "arena.h"
 #include "bbox.h"
+#include "layout.h"
 
 struct headless_args {
 	char *path;
+	char *paths[MAX_IMAGES];
+	int path_count;
 	char *output;
 	int output_base64;
 	int input_base64;

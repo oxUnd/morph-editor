@@ -8,6 +8,7 @@
 
 struct bbox {
 	int x, y, w, h;
+	int image_index;
 	char label[BBOX_LABEL_MAX];
 	uint32_t color;
 	int id;
@@ -46,7 +47,7 @@ void bbox_manager_init(struct bbox_manager *bm);
  * bbox_add - add a new bbox, returns its id or negative on error
  */
 int bbox_add(struct bbox_manager *bm, int x, int y, int w, int h,
-	     const char *label, uint32_t color);
+	     int image_index, const char *label, uint32_t color);
 
 /*
  * bbox_remove - remove bbox by id

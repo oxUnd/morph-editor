@@ -11,7 +11,10 @@ enum op_type {
 	OP_EDIT_LABEL,
 	OP_DRAW,
 	OP_TRANSFORM,
-	OP_COMPOSITE
+	OP_COMPOSITE,
+	OP_ADD_ARROW,
+	OP_REMOVE_ARROW,
+	OP_EDIT_ARROW_LABEL
 };
 
 struct history_op {

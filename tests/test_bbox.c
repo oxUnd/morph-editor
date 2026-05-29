@@ -19,7 +19,7 @@ static void test_add_remove(void)
 	int id;
 
 	bbox_manager_init(&bm);
-	id = bbox_add(&bm, 10, 20, 100, 80, "cat", 0xff0000);
+	id = bbox_add(&bm, 10, 20, 100, 80, 0, "cat", 0xff0000);
 	assert(id > 0);
 	assert(bm.count == 1);
 	assert(bm.selected == 0);
@@ -35,8 +35,8 @@ static void test_find_at(void)
 	struct bbox_manager bm;
 
 	bbox_manager_init(&bm);
-	bbox_add(&bm, 10, 20, 100, 80, "a", 0);
-	bbox_add(&bm, 200, 200, 50, 50, "b", 0);
+	bbox_add(&bm, 10, 20, 100, 80, 0, "a", 0);
+	bbox_add(&bm, 200, 200, 50, 50, 0, "b", 0);
 
 	assert(bbox_find_at(&bm, 50, 50) >= 0);
 	assert(bbox_find_at(&bm, 220, 220) >= 0);
@@ -62,8 +62,8 @@ static void test_select_next(void)
 	struct bbox_manager bm;
 
 	bbox_manager_init(&bm);
-	bbox_add(&bm, 0, 0, 10, 10, "a", 0);
-	bbox_add(&bm, 0, 0, 10, 10, "b", 0);
+	bbox_add(&bm, 0, 0, 10, 10, 0, "a", 0);
+	bbox_add(&bm, 0, 0, 10, 10, 0, "b", 0);
 
 	/* After adding 2 bboxes, selected is on the last added (1) */
 	assert(bm.selected == 1);

@@ -1,12 +1,15 @@
 #include "render.h"
 #include "json_util.h"
 #include "util.h"
+#include "layout.h"
+#include "arrow.h"
 
 #include "termbox2.h"
 
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <limits.h>
 
 /* ---- coordinate conversion ---- */
 
@@ -31,6 +34,75 @@ void pixel_to_term(int px, int py, int *tx, int *ty,
 {
 	*tx = (int)(px * scale) + offset_x;
 	*ty = (int)(py * scale / 2) + offset_y;
+}
+
+void render_calc_fit_multi(int n_images, const int *img_w, const int *img_h,
+			   int term_w, int term_h,
+			   struct layout_slot *slots)
+{
+	int avail_w;
+
+	term_h -= 3;
+
+	avail_w = term_w;
+	if (term_w >= 60)
+		avail_w = term_w - SIDEBAR_W;
+
+	layout_calc_tile(n_images, img_w, img_h, avail_w, term_h * 2,
+			 slots);
+}
+
+int term_to_pixel_multi(int tx, int ty, int *px, int *py, int *image_idx,
+			struct layout_slot *slots, int n_images)
+{
+	int i;
+	int best_idx = -1;
+	int best_dist = INT_MAX;
+
+	for (i = 0; i < n_images; i++) {
+		int lx, ly;
+		int ipx, ipy;
+		int dist;
+
+		lx = tx - slots[i].canvas_x;
+		ly = ty - slots[i].canvas_y;
+
+		if (lx < 0 || ly < 0)
+			continue;
+
+		ipx = (int)(lx / slots[i].scale);
+		ipy = (int)(ly / slots[i].scale * 2);
+
+		if (ipx < 0 || ipy < 0)
+			continue;
+
+		dist = lx + ly;
+		if (dist < best_dist) {
+			best_dist = dist;
+			best_idx = i;
+			*px = ipx;
+			*py = ipy;
+		}
+	}
+
+	if (best_idx < 0)
+		return -1;
+
+	*image_idx = best_idx;
+	return 0;
+}
+
+void pixel_to_term_multi(int px, int py, int image_idx,
+			 int *tx, int *ty,
+			 struct layout_slot *slots, int n_images)
+{
+	if (image_idx < 0 || image_idx >= n_images)
+		return;
+
+	*tx = (int)(px * slots[image_idx].scale) +
+		slots[image_idx].canvas_x;
+	*ty = (int)(py * slots[image_idx].scale / 2) +
+		slots[image_idx].canvas_y;
 }
 
 /* ---- render state ---- */

@@ -180,6 +180,12 @@ int main(int argc, char **argv)
 			args.composite_str = shift_arg(&argc, &argv);
 		} else if (!args.path) {
 			args.path = arg;
+			if (strcmp(command, "open") == 0 &&
+			    args.path_count == 0)
+				args.paths[args.path_count++] = arg;
+		} else if (strcmp(command, "open") == 0 &&
+			   args.path_count < MAX_IMAGES) {
+			args.paths[args.path_count++] = arg;
 		} else if (strcmp(command, "diff") == 0 &&
 			   !args.diff_path) {
 			args.diff_path = arg;
@@ -192,13 +198,30 @@ int main(int argc, char **argv)
 	ret = 0;
 
 	if (strcmp(command, "open") == 0 && !no_tui && !serve_mode) {
-		/* Interactive mode */
 		struct editor ed;
 
 		editor_init(&ed);
-		if (args.path) {
-			if (editor_open_image(&ed, args.path) < 0) {
-				fprintf(stderr, "error: cannot open %s\n",
+		if (args.path_count > 0) {
+			if (editor_open_images(&ed,
+					       (const char **)args.paths,
+					       args.path_count) < 0) {
+				int j;
+
+				for (j = 0; j < args.path_count; j++)
+					fprintf(stderr,
+						"error: cannot open %s\n",
+						args.paths[j]);
+				editor_free(&ed);
+				arena_set_free(&arenas);
+				log_close();
+				return 1;
+			}
+		} else if (args.path) {
+			const char *single = args.path;
+
+			if (editor_open_images(&ed, &single, 1) < 0) {
+				fprintf(stderr,
+					"error: cannot open %s\n",
 					args.path);
 				editor_free(&ed);
 				arena_set_free(&arenas);

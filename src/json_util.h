@@ -5,6 +5,7 @@
 #include "arena.h"
 #include "cJSON.h"
 #include "bbox.h"
+#include "arrow.h"
 
 /*
  * base64_encode - encode binary data to base64 string
@@ -46,5 +47,8 @@ struct bbox bbox_from_json(cJSON *json);
  * Returns static buffer, not thread-safe.
  */
 const char *color_to_hex(uint32_t color);
+
+cJSON *arrow_to_json(struct arrow *a);
+struct arrow arrow_from_json(cJSON *json);
 
 #endif /* MORPH_EDITOR_JSON_UTIL_H */

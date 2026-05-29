@@ -193,6 +193,9 @@ cJSON *bbox_to_json(struct bbox *bbox)
 	cJSON_AddNumberToObject(obj, "y", bbox->y);
 	cJSON_AddNumberToObject(obj, "w", bbox->w);
 	cJSON_AddNumberToObject(obj, "h", bbox->h);
+	if (bbox->image_index > 0)
+		cJSON_AddNumberToObject(obj, "image_index",
+					bbox->image_index);
 	if (bbox->label[0])
 		cJSON_AddStringToObject(obj, "label", bbox->label);
 	cJSON_AddStringToObject(obj, "color", color_to_hex(bbox->color));
@@ -220,6 +223,9 @@ struct bbox bbox_from_json(cJSON *json)
 	tmp = cJSON_GetObjectItem(json, "h");
 	if (tmp)
 		b.h = tmp->valueint;
+	tmp = cJSON_GetObjectItem(json, "image_index");
+	if (tmp)
+		b.image_index = tmp->valueint;
 	tmp = cJSON_GetObjectItem(json, "label");
 	if (tmp && tmp->valuestring)
 		strncpy(b.label, tmp->valuestring, sizeof(b.label) - 1);
@@ -236,4 +242,71 @@ const char *color_to_hex(uint32_t color)
 	snprintf(buf, sizeof(buf), "#%02x%02x%02x",
 		 COLOR_R(color), COLOR_G(color), COLOR_B(color));
 	return buf;
+}
+
+static cJSON *arrow_point_to_json(struct arrow_point *pt)
+{
+	cJSON *obj = cJSON_CreateObject();
+
+	cJSON_AddNumberToObject(obj, "image_index", pt->image_index);
+	cJSON_AddNumberToObject(obj, "x", pt->x);
+	cJSON_AddNumberToObject(obj, "y", pt->y);
+	return obj;
+}
+
+static struct arrow_point arrow_point_from_json(cJSON *json)
+{
+	struct arrow_point pt;
+	cJSON *tmp;
+
+	memset(&pt, 0, sizeof(pt));
+	tmp = cJSON_GetObjectItem(json, "image_index");
+	if (tmp)
+		pt.image_index = tmp->valueint;
+	tmp = cJSON_GetObjectItem(json, "x");
+	if (tmp)
+		pt.x = tmp->valueint;
+	tmp = cJSON_GetObjectItem(json, "y");
+	if (tmp)
+		pt.y = tmp->valueint;
+	return pt;
+}
+
+cJSON *arrow_to_json(struct arrow *a)
+{
+	cJSON *obj = cJSON_CreateObject();
+
+	cJSON_AddNumberToObject(obj, "id", a->id);
+	cJSON_AddItemToObject(obj, "from", arrow_point_to_json(&a->from));
+	cJSON_AddItemToObject(obj, "to", arrow_point_to_json(&a->to));
+	if (a->label[0])
+		cJSON_AddStringToObject(obj, "label", a->label);
+	cJSON_AddStringToObject(obj, "color", color_to_hex(a->color));
+	return obj;
+}
+
+struct arrow arrow_from_json(cJSON *json)
+{
+	struct arrow a;
+	cJSON *tmp;
+	cJSON *pt_json;
+
+	memset(&a, 0, sizeof(a));
+	tmp = cJSON_GetObjectItem(json, "id");
+	if (tmp)
+		a.id = tmp->valueint;
+	pt_json = cJSON_GetObjectItem(json, "from");
+	if (pt_json)
+		a.from = arrow_point_from_json(pt_json);
+	pt_json = cJSON_GetObjectItem(json, "to");
+	if (pt_json)
+		a.to = arrow_point_from_json(pt_json);
+	tmp = cJSON_GetObjectItem(json, "label");
+	if (tmp && tmp->valuestring)
+		strncpy(a.label, tmp->valuestring,
+			ARROW_LABEL_MAX - 1);
+	tmp = cJSON_GetObjectItem(json, "color");
+	if (tmp && tmp->valuestring)
+		a.color = parse_color(tmp->valuestring);
+	return a;
 }

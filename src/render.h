@@ -6,6 +6,8 @@
 #include "terminal.h"
 #include "image.h"
 #include "bbox.h"
+#include "arrow.h"
+#include "layout.h"
 
 #define SIDEBAR_W 32
 
@@ -27,12 +29,20 @@ void render_init(struct render_state *rs, enum term_proto proto);
 void render_calc_fit(struct render_state *rs, int img_w, int img_h,
 		     int term_w, int term_h);
 
+void render_calc_fit_multi(int n_images, const int *img_w, const int *img_h,
+			   int term_w, int term_h,
+			   struct layout_slot *slots);
+
 void term_to_pixel(int tx, int ty, int *px, int *py,
 		   int img_w, int img_h,
 		   int offset_x, int offset_y, float scale);
 
-void pixel_to_term(int px, int py, int *tx, int *ty,
-		   int offset_x, int offset_y, float scale);
+int term_to_pixel_multi(int tx, int ty, int *px, int *py, int *image_idx,
+			struct layout_slot *slots, int n_images);
+
+void pixel_to_term_multi(int px, int py, int image_idx,
+			 int *tx, int *ty,
+			 struct layout_slot *slots, int n_images);
 
 char *render_image_sixel(struct arena *a, const unsigned char *pixels,
 			 int w, int h, int channels);
