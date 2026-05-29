@@ -2,6 +2,7 @@
 #include "render.h"
 #include "json_util.h"
 #include "canvas.h"
+#include "draw.h"
 #include "util.h"
 
 #include "termbox2.h"
@@ -316,6 +317,13 @@ static void editor_draw_arrow_overlay(struct editor *ed)
 		? (term_w - ed->render.sidebar_w)
 		: term_w;
 
+	/*
+	 * Arrow shafts are already drawn directly into the composited
+	 * image pixel buffer (see composite + draw_arrow calls in
+	 * editor_render), rendered as true solid lines by the terminal
+	 * image protocol. This function only handles auxiliary elements
+	 * on the character layer: label text and drag-start indicators.
+	 */
 	for (i = 0; i < ed->arrows.count; i++) {
 		struct arrow *a = &ed->arrows.arrows[i];
 		int is_sel = (i == ed->arrows.selected);
@@ -339,57 +347,6 @@ static void editor_draw_arrow_overlay(struct editor *ed)
 				    a->to.image_index,
 				    &to_tx, &to_ty,
 				    ed->layout_slots, ed->image_count);
-
-		if (from_tx >= sidebar_x || to_tx >= sidebar_x)
-			continue;
-
-		{
-			int adx = abs(to_tx - from_tx);
-			int ady = abs(to_ty - from_ty);
-			uint32_t head_ch;
-			int n_steps;
-			int prev_cx = -999, prev_cy = -999;
-			int step;
-
-			if (adx >= ady * 2)
-				head_ch = (to_tx > from_tx) ? '>' : '<';
-			else if (ady >= adx * 2)
-				head_ch = (to_ty > from_ty) ? 'v' : '^';
-			else if (to_tx > from_tx)
-				head_ch = (to_ty > from_ty) ?
-					0x2198 : 0x2197;
-			else
-				head_ch = (to_ty > from_ty) ?
-					0x2199 : 0x2196;
-
-			n_steps = MAX(adx, ady);
-			if (n_steps == 0)
-				n_steps = 1;
-
-			for (step = 0; step <= n_steps; step++) {
-				int nx = from_tx +
-					(int)((long long)(to_tx - from_tx)
-					      * step / n_steps);
-				int ny = from_ty +
-					(int)((long long)(to_ty - from_ty)
-					      * step / n_steps);
-
-				if (nx == prev_cx && ny == prev_cy)
-					continue;
-				prev_cx = nx;
-				prev_cy = ny;
-
-				if (nx == to_tx && ny == to_ty)
-					continue;
-				if (nx >= 0 && nx < sidebar_x &&
-				    ny >= 0)
-					tb_set_cell(nx, ny, '.',
-						    fg, TB_DEFAULT);
-			}
-
-			tb_set_cell(to_tx, to_ty, head_ch,
-				    fg | TB_BOLD, TB_DEFAULT);
-		}
 
 		if (a->label[0]) {
 			int lx = (from_tx + to_tx) / 2;
@@ -417,6 +374,7 @@ static void editor_draw_arrow_overlay(struct editor *ed)
 		}
 	}
 }
+
 static const char *mode_str(enum editor_mode mode)
 {
 	switch (mode) {
@@ -542,12 +500,61 @@ static void editor_do_render(struct editor *ed)
 	editor_draw_sidebar(ed);
 
 	{
-		int need_image_upload =
+		unsigned long arrows_fp = 0;
+		int need_image_upload;
+
+		/*
+		 * Arrows are drawn directly into image pixels, so arrow
+		 * data changes must also trigger re-compositing +
+		 * re-upload. The fingerprint simply accumulates each
+		 * arrow's endpoints and color into a 64-bit rolling hash.
+		 */
+		{
+			int ai;
+			for (ai = 0; ai < ed->arrows.count; ai++) {
+				struct arrow *a = &ed->arrows.arrows[ai];
+				arrows_fp = arrows_fp * 1315423911u
+					+ (unsigned long)(a->from.image_index
+							  * 73856093);
+				arrows_fp = arrows_fp * 1315423911u
+					+ (unsigned long)(a->from.x * 19349663);
+				arrows_fp = arrows_fp * 1315423911u
+					+ (unsigned long)(a->from.y * 83492791);
+				arrows_fp = arrows_fp * 1315423911u
+					+ (unsigned long)(a->to.image_index
+							  * 12582917);
+				arrows_fp = arrows_fp * 1315423911u
+					+ (unsigned long)(a->to.x * 25165843);
+				arrows_fp = arrows_fp * 1315423911u
+					+ (unsigned long)(a->to.y * 50331653);
+				arrows_fp = arrows_fp * 1315423911u
+					+ (unsigned long)a->color;
+			}
+			/*
+			 * Note: ed->arrows.selected is intentionally
+			 * excluded from the fingerprint. Otherwise every
+			 * sidebar click to switch the selected arrow would
+			 * trigger a full multi-image re-composite +
+			 * re-upload, which is very laggy. Selection state
+			 * is indicated by sidebar highlighting alone.
+			 */
+		}
+
+		need_image_upload =
 			(!ed->image_uploaded) ||
 			(ed->image_gen != ed->last_uploaded_gen) ||
 			(term_w != ed->last_term_w) ||
-			(term_h != ed->last_term_h);
+			(term_h != ed->last_term_h) ||
+			(arrows_fp != ed->last_arrows_fp);
 
+		/*
+		 * Only enter sync compositing mode when image re-upload
+		 * is actually needed. \033[?2026h..l atomically commits
+		 * "image re-upload + overlay + tb_present" to avoid
+		 * flicker. When only the overlay changes (e.g. sidebar
+		 * toggle, bbox selection), skip sync mode; otherwise each
+		 * click adds an extra tb_present, causing noticeable lag.
+		 */
 		if (need_image_upload) {
 			tb_send("\033[?2026h", 8);
 			tb_present();
@@ -556,6 +563,61 @@ static void editor_do_render(struct editor *ed)
 			if (ed->image_count == 1) {
 				struct image_slot *sl = &ed->images[0];
 				char *img_data = NULL;
+				unsigned char *src_px = sl->img.pixels;
+				int src_w = sl->img.width;
+				int src_h = sl->img.height;
+				int src_ch = sl->img.channels;
+
+				/*
+				 * Draw arrows directly into a copy of the
+				 * image pixels, rendered by the terminal
+				 * image protocol (kitty/iterm2/sixel) as
+				 * a regular image — so arrows appear as
+				 * true pixel solid lines, not character
+				 * approximations.
+				 */
+				if (ed->arrows.count > 0) {
+					size_t sz = (size_t)src_w * src_h
+						* src_ch;
+					unsigned char *copy = arena_alloc(
+						&ed->arenas.arenas[
+							ARENA_COMMAND], sz);
+					if (copy) {
+						int ai;
+						int thick = src_w / 400;
+
+						if (thick < 2)
+							thick = 2;
+						memcpy(copy, src_px, sz);
+						for (ai = 0;
+						     ai < ed->arrows.count;
+						     ai++) {
+							struct arrow *a =
+								&ed->arrows
+								.arrows[ai];
+							uint32_t color =
+								a->color
+								? a->color
+								: 0xff3030u;
+							if (a->from.image_index
+							    != 0 ||
+							    a->to.image_index
+							    != 0)
+								continue;
+							draw_arrow(
+								copy,
+								src_w, src_h,
+								src_ch,
+								a->from.x,
+								a->from.y,
+								a->to.x,
+								a->to.y,
+								color,
+								thick);
+						}
+						src_px = copy;
+					}
+				}
 
 				if (ed->proto == TERM_PROTO_KITTY) {
 					int dc = sl->display_w;
@@ -565,10 +627,10 @@ static void editor_do_render(struct editor *ed)
 					img_data = render_image_kitty(
 						&ed->arenas.arenas[
 							ARENA_COMMAND],
-						sl->img.pixels,
-						sl->img.width,
-						sl->img.height,
-						sl->img.channels,
+						src_px,
+						src_w,
+						src_h,
+						src_ch,
 						ed->render
 							.kitty_placement_id,
 						dc, dr);
@@ -581,20 +643,20 @@ static void editor_do_render(struct editor *ed)
 					img_data = render_image_iterm2(
 						&ed->arenas.arenas[
 							ARENA_COMMAND],
-						sl->img.pixels,
-						sl->img.width,
-						sl->img.height,
-						sl->img.channels,
+						src_px,
+						src_w,
+						src_h,
+						src_ch,
 						dc, dr);
 				} else {
 					unsigned char *dp;
 					dp = image_resize(
 						&ed->arenas.arenas[
 							ARENA_COMMAND],
-						sl->img.pixels,
-						sl->img.width,
-						sl->img.height,
-						sl->img.channels,
+						src_px,
+						src_w,
+						src_h,
+						src_ch,
 						sl->display_w,
 						sl->display_h);
 					if (dp) {
@@ -604,14 +666,29 @@ static void editor_do_render(struct editor *ed)
 							ARENA_COMMAND],
 						dp, sl->display_w,
 						sl->display_h,
-						sl->img.channels);
+						src_ch);
 					}
 				}
 				if (img_data)
 					tb_send(img_data,
 						strlen(img_data));
 			} else {
-				int cw = 0, ch = 0;
+				/*
+				 * Cell-to-pixel scale: layout gives
+				 * display_w / canvas_x in "terminal columns"
+				 * and display_h / canvas_y*2 in "half-cells".
+				 * Using them directly as pixels yields ~1
+				 * pixel/cell, which looks blurry when the
+				 * terminal scales it up. Here we composite
+				 * at SUPER× in pixel space, then let the
+				 * terminal protocol render at the original
+				 * cell size, producing a high-resolution
+				 * downsampled result.
+				 */
+				const int SUPER = 8;
+				int cw_cells = 0, ch_halfcells = 0;
+				int cw_px, ch_px;
+				int disp_cols, disp_rows;
 				struct canvas_layer layers[MAX_IMAGES];
 				unsigned char *composite_pixels;
 				char *img_data = NULL;
@@ -620,21 +697,28 @@ static void editor_do_render(struct editor *ed)
 					int r;
 					r = ed->layout_slots[i].canvas_y +
 						(ed->layout_slots[i].display_h + 1) / 2;
-					if (r > ch)
-						ch = r;
+					if (r > ch_halfcells)
+						ch_halfcells = r;
 					r = ed->layout_slots[i].canvas_x +
 						ed->layout_slots[i].display_w;
-					if (r > cw)
-						cw = r;
+					if (r > cw_cells)
+						cw_cells = r;
 				}
-				ch *= 2;
+				disp_cols = cw_cells;
+				disp_rows = ch_halfcells;
+				cw_px = cw_cells * SUPER;
+				ch_px = ch_halfcells * 2 * SUPER;
 
 				for (i = 0; i < ed->image_count; i++) {
 					struct image_slot *sl = &ed->images[i];
 					unsigned char *resized;
+					int rw = sl->display_w * SUPER;
+					int rh = sl->display_h * SUPER;
 
 					memset(&layers[i], 0,
 					       sizeof(layers[i]));
+					if (rw < 1) rw = 1;
+					if (rh < 1) rh = 1;
 					resized = image_resize(
 						&ed->arenas.arenas[
 							ARENA_COMMAND],
@@ -642,18 +726,17 @@ static void editor_do_render(struct editor *ed)
 						sl->img.width,
 						sl->img.height,
 						sl->img.channels,
-						sl->display_w,
-						sl->display_h);
+						rw, rh);
 					if (resized) {
 						layers[i].pixels = resized;
-						layers[i].w = sl->display_w;
-						layers[i].h = sl->display_h;
+						layers[i].w = rw;
+						layers[i].h = rh;
 						layers[i].x =
 						  ed->layout_slots[i]
-						  	.canvas_x;
+						  	.canvas_x * SUPER;
 						layers[i].y =
 						  ed->layout_slots[i]
-						  	.canvas_y * 2;
+						  	.canvas_y * 2 * SUPER;
 						layers[i].opacity = 1.0f;
 						layers[i].blend =
 							BLEND_NORMAL;
@@ -662,8 +745,96 @@ static void editor_do_render(struct editor *ed)
 
 				composite_pixels = canvas_composite(
 					&ed->arenas.arenas[ARENA_COMMAND],
-					cw, ch, layers,
+					cw_px, ch_px, layers,
 					ed->image_count, 0x1a1a2e);
+
+				/*
+				 * Draw arrows directly on composited pixels,
+				 * so the terminal image protocol renders them
+				 * as pixel graphics — true solid lines, not
+				 * character approximations.
+				 *
+				 * Pixel coordinate mapping: image (px, py)
+				 * after resize to (display_w*SUPER,
+				 * display_h*SUPER), plus layout offsets
+				 * canvas_x*SUPER, canvas_y*2*SUPER.
+				 */
+				if (composite_pixels &&
+				    ed->arrows.count > 0) {
+					int ai;
+					int thick = cw_px / 400;
+
+					if (thick < 2)
+						thick = 2;
+					for (ai = 0;
+					     ai < ed->arrows.count;
+					     ai++) {
+						struct arrow *a =
+							&ed->arrows.arrows[ai];
+						struct image_slot *sf;
+						struct image_slot *st;
+						int fx, fy, tx2, ty2;
+						uint32_t color;
+
+						if (a->from.image_index < 0 ||
+						    a->from.image_index >=
+						    ed->image_count)
+							continue;
+						if (a->to.image_index < 0 ||
+						    a->to.image_index >=
+						    ed->image_count)
+							continue;
+						sf = &ed->images[
+							a->from.image_index];
+						st = &ed->images[
+							a->to.image_index];
+						if (sf->img.width <= 0 ||
+						    sf->img.height <= 0 ||
+						    st->img.width <= 0 ||
+						    st->img.height <= 0)
+							continue;
+						fx = ed->layout_slots[
+							a->from.image_index]
+							.canvas_x * SUPER
+							+ (int)((long long)
+								a->from.x
+								* sf->display_w
+								* SUPER
+								/ sf->img.width);
+						fy = ed->layout_slots[
+							a->from.image_index]
+							.canvas_y * 2 * SUPER
+							+ (int)((long long)
+								a->from.y
+								* sf->display_h
+								* SUPER
+								/ sf->img.height);
+						tx2 = ed->layout_slots[
+							a->to.image_index]
+							.canvas_x * SUPER
+							+ (int)((long long)
+								a->to.x
+								* st->display_w
+								* SUPER
+								/ st->img.width);
+						ty2 = ed->layout_slots[
+							a->to.image_index]
+							.canvas_y * 2 * SUPER
+							+ (int)((long long)
+								a->to.y
+								* st->display_h
+								* SUPER
+								/ st->img.height);
+						color = a->color
+							? a->color
+							: 0xff3030u;
+						draw_arrow(composite_pixels,
+							   cw_px, ch_px, 4,
+							   fx, fy,
+							   tx2, ty2,
+							   color, thick);
+					}
+				}
 
 				if (composite_pixels) {
 					if (ed->proto ==
@@ -673,10 +844,10 @@ static void editor_do_render(struct editor *ed)
 						&ed->arenas.arenas[
 							ARENA_COMMAND],
 						composite_pixels,
-						cw, ch, 4,
+						cw_px, ch_px, 4,
 						ed->render
 							.kitty_placement_id,
-						cw, ch / 2);
+						disp_cols, disp_rows);
 					} else if (ed->proto ==
 						   TERM_PROTO_ITERM2) {
 						img_data =
@@ -684,15 +855,15 @@ static void editor_do_render(struct editor *ed)
 						&ed->arenas.arenas[
 							ARENA_COMMAND],
 						composite_pixels,
-						cw, ch, 4,
-						cw, ch / 2);
+						cw_px, ch_px, 4,
+						disp_cols, disp_rows);
 					} else {
 						img_data =
 						  render_image_sixel(
 						&ed->arenas.arenas[
 							ARENA_COMMAND],
 						composite_pixels,
-						cw, ch, 4);
+						cw_px, ch_px, 4);
 					}
 					if (img_data)
 						tb_send(img_data,
@@ -705,12 +876,16 @@ static void editor_do_render(struct editor *ed)
 			ed->last_uploaded_gen = ed->image_gen;
 			ed->last_term_w = term_w;
 			ed->last_term_h = term_h;
-			tb_send("\033[?2026l", 8);
+			ed->last_arrows_fp = arrows_fp;
 		}
 
 		editor_draw_bbox_overlay(ed);
 		editor_draw_arrow_overlay(ed);
 		tb_present();
+		if (need_image_upload) {
+			/* Sync compositing END: image + overlay visible at once */
+			tb_send("\033[?2026l", 8);
+		}
 	}
 
 	(void)x;
@@ -1172,6 +1347,15 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 						ARROW_DRAG_NONE;
 					ed->mode = MODE_VIEW;
 
+				/*
+				 * Ensure the main loop runs editor_do_render
+				 * after entering LABEL_EDIT, so the newly
+				 * added arrow is immediately drawn onto the
+				 * image.
+				 */
+					ed->force_full_render = 1;
+					ed->render.dirty = 1;
+
 					editor_enter_label_edit(
 						ed,
 						ed->arrows.arrows[
@@ -1437,6 +1621,33 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 			ed->arrows.drag_state = ARROW_DRAG_NONE;
 			ed->render.dirty = 1;
 			break;
+		case 'e': {
+			/*
+			 * Edit the label of the currently selected object:
+			 * prefer arrow, otherwise bbox.
+			 */
+			struct arrow *as =
+				arrow_get_selected(&ed->arrows);
+			if (as) {
+				editor_push_history(
+					ed, OP_EDIT_ARROW_LABEL);
+				editor_enter_label_edit(
+					ed, as->id, 1, as->label);
+				break;
+			}
+			{
+				struct bbox *bs =
+					bbox_get_selected(&ed->bboxes);
+				if (bs) {
+					editor_push_history(
+						ed, OP_EDIT_LABEL);
+					editor_enter_label_edit(
+						ed, bs->id, 0,
+						bs->label);
+				}
+			}
+			break;
+		}
 		case 'd': {
 			struct arrow *as =
 				arrow_get_selected(&ed->arrows);
@@ -1549,11 +1760,13 @@ int editor_run(struct editor *ed)
 		tnow = now_ms();
 
 		if (ed->render.dirty) {
-			if (ed->mode == MODE_LABEL_EDIT) {
+			if (ed->mode == MODE_LABEL_EDIT &&
+			    !ed->force_full_render) {
 				editor_redraw_status_bar_fast(ed);
 				ed->last_render_ms = tnow;
 			} else {
 				editor_do_render(ed);
+				ed->force_full_render = 0;
 				ed->last_render_ms = tnow;
 			}
 		}

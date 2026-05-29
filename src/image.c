@@ -178,9 +178,20 @@ unsigned char *image_resize(struct arena *a, const unsigned char *pixels,
 	if (!out)
 		return NULL;
 
-	stbir_resize_uint8_linear(pixels, w, h, w * channels,
-				  out, new_w, new_h, new_w * channels,
-				  (stbir_pixel_layout)channels);
+	/*
+	 * Use sRGB-aware resizing with the MITCHELL filter so that
+	 * heavy downscaling (e.g. many images laid out in a grid)
+	 * stays sharp instead of looking washed-out / blurry.
+	 * stbir_resize_uint8_linear treats pixels as linear and uses
+	 * the default filter which produces noticeably soft results
+	 * when the scale ratio is small.
+	 */
+	stbir_resize(pixels, w, h, w * channels,
+		     out, new_w, new_h, new_w * channels,
+		     (stbir_pixel_layout)channels,
+		     STBIR_TYPE_UINT8_SRGB,
+		     STBIR_EDGE_CLAMP,
+		     STBIR_FILTER_MITCHELL);
 	return out;
 }
 

@@ -52,6 +52,8 @@ struct editor {
 	int last_uploaded_gen;
 	int last_term_w;
 	int last_term_h;
+	unsigned long last_arrows_fp;
+	int force_full_render;
 	struct layout_slot layout_slots[MAX_IMAGES];
 };
 

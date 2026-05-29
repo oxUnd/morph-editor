@@ -93,32 +93,137 @@ void draw_filled_circle(unsigned char *pixels, int w, int h, int channels,
 	}
 }
 
+/*
+ * Anti-aliased pixel blending: blend the given color with the background
+ * at the specified alpha (0..1) and write back. Line rendering maps
+ * alpha from "distance to the line segment center", yielding smooth
+ * edges and avoiding staircase aliasing from Bresenham thickening.
+ */
+static void blend_pixel_aa(unsigned char *pixels, int w, int h, int channels,
+			   int x, int y, uint32_t color, float alpha)
+{
+	unsigned char *p;
+	float r, g, b;
+
+	if (x < 0 || x >= w || y < 0 || y >= h)
+		return;
+	if (alpha <= 0.0f)
+		return;
+	if (alpha > 1.0f)
+		alpha = 1.0f;
+
+	p = pixels + (y * w + x) * channels;
+	r = (float)COLOR_R(color);
+	g = (float)COLOR_G(color);
+	b = (float)COLOR_B(color);
+
+	p[0] = (unsigned char)(r * alpha + p[0] * (1.0f - alpha));
+	p[1] = (unsigned char)(g * alpha + p[1] * (1.0f - alpha));
+	p[2] = (unsigned char)(b * alpha + p[2] * (1.0f - alpha));
+	if (channels == 4)
+		p[3] = 255;
+}
+
+/*
+ * Anti-aliased thick line: treat (x0,y0)→(x1,y1) as the centerline
+ * with radius r; inside the capsule shape, apply smooth transition
+ * based on edge-to-center distance d vs radius r:
+ *   d <= r-1  -> alpha = 1 (fully opaque)
+ *   r-1 < d < r -> alpha = r - d (linear edge anti-aliasing)
+ *   d >= r    -> alpha = 0
+ */
+static void draw_line_aa(unsigned char *pixels, int w, int h, int channels,
+			 float x0, float y0, float x1, float y1,
+			 uint32_t color, float radius)
+{
+	float dx = x1 - x0;
+	float dy = y1 - y0;
+	float len2 = dx * dx + dy * dy;
+	int xmin, xmax, ymin, ymax;
+	int x, y;
+
+	if (len2 < 1e-6f)
+		return;
+
+	xmin = (int)floorf(fminf(x0, x1) - radius - 1.0f);
+	xmax = (int)ceilf(fmaxf(x0, x1) + radius + 1.0f);
+	ymin = (int)floorf(fminf(y0, y1) - radius - 1.0f);
+	ymax = (int)ceilf(fmaxf(y0, y1) + radius + 1.0f);
+	if (xmin < 0)
+		xmin = 0;
+	if (ymin < 0)
+		ymin = 0;
+	if (xmax >= w)
+		xmax = w - 1;
+	if (ymax >= h)
+		ymax = h - 1;
+
+	for (y = ymin; y <= ymax; y++) {
+		for (x = xmin; x <= xmax; x++) {
+			float px = (float)x + 0.5f;
+			float py = (float)y + 0.5f;
+			float t;
+			float qx, qy;
+			float d;
+			float alpha;
+
+			t = ((px - x0) * dx + (py - y0) * dy) / len2;
+			if (t < 0.0f) t = 0.0f;
+			if (t > 1.0f) t = 1.0f;
+			qx = x0 + t * dx;
+			qy = y0 + t * dy;
+			d = sqrtf((px - qx) * (px - qx) +
+				  (py - qy) * (py - qy));
+
+			if (d <= radius - 1.0f)
+				alpha = 1.0f;
+			else if (d < radius)
+				alpha = radius - d;
+			else
+				continue;
+
+			blend_pixel_aa(pixels, w, h, channels,
+				       x, y, color, alpha);
+		}
+	}
+}
+
 void draw_arrow(unsigned char *pixels, int w, int h, int channels,
 		int x0, int y0, int x1, int y1,
 		uint32_t color, int thickness)
 {
 	double angle;
 	double a_angle, b_angle;
-	int ax, ay, bx, by;
-	int head_len;
+	float ax, ay, bx, by;
+	float head_len;
+	float radius;
 
-	draw_line(pixels, w, h, channels, x0, y0, x1, y1,
-		  color, thickness);
+	radius = thickness * 0.5f;
+	if (radius < 1.0f)
+		radius = 1.0f;
 
-	head_len = 10;
-	angle = atan2(y1 - y0, x1 - x0);
-	a_angle = angle + M_PI * 0.8;
-	b_angle = angle - M_PI * 0.8;
+	/* Main shaft: anti-aliased capsule */
+	draw_line_aa(pixels, w, h, channels,
+		     (float)x0, (float)y0, (float)x1, (float)y1,
+		     color, radius);
 
-	ax = x1 + (int)(head_len * cos(a_angle));
-	ay = y1 + (int)(head_len * sin(a_angle));
-	bx = x1 + (int)(head_len * cos(b_angle));
-	by = y1 + (int)(head_len * sin(b_angle));
+	/* Arrow head: length scales with thickness, at least 8 pixels */
+	head_len = (float)thickness * 4.0f;
+	if (head_len < 8.0f)
+		head_len = 8.0f;
+	angle = atan2((double)(y1 - y0), (double)(x1 - x0));
+	a_angle = angle + M_PI * 0.85;
+	b_angle = angle - M_PI * 0.85;
 
-	draw_line(pixels, w, h, channels, x1, y1, ax, ay,
-		  color, thickness);
-	draw_line(pixels, w, h, channels, x1, y1, bx, by,
-		  color, thickness);
+	ax = (float)x1 + (float)(head_len * cos(a_angle));
+	ay = (float)y1 + (float)(head_len * sin(a_angle));
+	bx = (float)x1 + (float)(head_len * cos(b_angle));
+	by = (float)y1 + (float)(head_len * sin(b_angle));
+
+	draw_line_aa(pixels, w, h, channels,
+		     (float)x1, (float)y1, ax, ay, color, radius);
+	draw_line_aa(pixels, w, h, channels,
+		     (float)x1, (float)y1, bx, by, color, radius);
 }
 
 void draw_text_on_pixels(unsigned char *pixels, int w, int h, int channels,
