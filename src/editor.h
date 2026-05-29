@@ -9,6 +9,7 @@
 #include "history.h"
 #include "terminal.h"
 #include "layout.h"
+#include "video.h"
 
 #include "termbox2.h"
 
@@ -55,12 +56,17 @@ struct editor {
 	unsigned long last_arrows_fp;
 	int force_full_render;
 	struct layout_slot layout_slots[MAX_IMAGES];
+	int is_video;
+	struct video_state video;
 };
 
 int editor_init(struct editor *ed);
 void editor_free(struct editor *ed);
 int editor_open_images(struct editor *ed, const char **paths, int count);
 int editor_open_image_base64(struct editor *ed, const char *b64);
+int editor_open_video(struct editor *ed, const char *path);
+int editor_video_seek(struct editor *ed, int frame_num);
+int path_is_video(const char *path);
 int editor_run(struct editor *ed);
 void editor_stop(struct editor *ed);
 void editor_render(struct editor *ed);

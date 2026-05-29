@@ -202,9 +202,23 @@ int main(int argc, char **argv)
 
 		editor_init(&ed);
 		if (args.path_count > 0) {
-			if (editor_open_images(&ed,
-					       (const char **)args.paths,
-					       args.path_count) < 0) {
+			if (args.path_count == 1 &&
+			    path_is_video(args.paths[0])) {
+				if (editor_open_video(&ed,
+						      args.paths[0]) < 0) {
+					fprintf(stderr,
+						"error: cannot open "
+						"video %s\n",
+						args.paths[0]);
+					editor_free(&ed);
+					arena_set_free(&arenas);
+					log_close();
+					return 1;
+				}
+			} else if (editor_open_images(
+					&ed,
+					(const char **)args.paths,
+					args.path_count) < 0) {
 				int j;
 
 				for (j = 0; j < args.path_count; j++)
@@ -219,7 +233,19 @@ int main(int argc, char **argv)
 		} else if (args.path) {
 			const char *single = args.path;
 
-			if (editor_open_images(&ed, &single, 1) < 0) {
+			if (path_is_video(single)) {
+				if (editor_open_video(&ed, single) < 0) {
+					fprintf(stderr,
+						"error: cannot open "
+						"video %s\n",
+						args.path);
+					editor_free(&ed);
+					arena_set_free(&arenas);
+					log_close();
+					return 1;
+				}
+			} else if (editor_open_images(&ed, &single, 1)
+				   < 0) {
 				fprintf(stderr,
 					"error: cannot open %s\n",
 					args.path);

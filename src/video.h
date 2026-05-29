@@ -11,10 +11,14 @@ struct video_state {
 	char *path;
 	int total_frames;
 	double fps;
+	int width;
+	int height;
 	int current_frame;
+	/* Cache stores raw RGBA pixels (width*height*4 each). */
 	unsigned char *frame_cache[VIDEO_CACHE_SIZE];
 	int cache_frame_ids[VIDEO_CACHE_SIZE];
 	int cache_count;
+	int cache_next; /* round-robin slot for replacement */
 	uv_process_t ffmpeg_proc;
 	uv_pipe_t ffmpeg_stdout;
 	uv_pipe_t ffmpeg_stdin;

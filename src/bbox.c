@@ -281,3 +281,135 @@ struct bbox *bbox_get_selected(struct bbox_manager *bm)
 		return NULL;
 	return &bm->boxes[bm->selected];
 }
+
+static struct bbox *bbox_find_by_id(struct bbox_manager *bm, int id)
+{
+	int i;
+
+	for (i = 0; i < bm->count; i++) {
+		if (bm->boxes[i].id == id)
+			return &bm->boxes[i];
+	}
+	return NULL;
+}
+
+int bbox_set_keyframe(struct bbox_manager *bm, int id, int frame,
+		      int x, int y, int w, int h)
+{
+	struct bbox *b;
+	int i, ins;
+
+	b = bbox_find_by_id(bm, id);
+	if (!b)
+		return -1;
+
+	/* Update or insert sorted by frame ascending. */
+	for (i = 0; i < b->kf_count; i++) {
+		if (b->keyframes[i].frame == frame) {
+			b->keyframes[i].x = x;
+			b->keyframes[i].y = y;
+			b->keyframes[i].w = w;
+			b->keyframes[i].h = h;
+			b->x = x;
+			b->y = y;
+			b->w = w;
+			b->h = h;
+			return 0;
+		}
+		if (b->keyframes[i].frame > frame)
+			break;
+	}
+
+	if (b->kf_count >= BBOX_KF_MAX)
+		return -1;
+	ins = i;
+	memmove(&b->keyframes[ins + 1], &b->keyframes[ins],
+		(b->kf_count - ins) * sizeof(struct bbox_kf));
+	b->keyframes[ins].frame = frame;
+	b->keyframes[ins].x = x;
+	b->keyframes[ins].y = y;
+	b->keyframes[ins].w = w;
+	b->keyframes[ins].h = h;
+	b->kf_count++;
+	b->x = x;
+	b->y = y;
+	b->w = w;
+	b->h = h;
+	return 0;
+}
+
+int bbox_remove_keyframe(struct bbox_manager *bm, int id, int frame)
+{
+	struct bbox *b;
+	int i;
+
+	b = bbox_find_by_id(bm, id);
+	if (!b)
+		return -1;
+	for (i = 0; i < b->kf_count; i++) {
+		if (b->keyframes[i].frame == frame) {
+			memmove(&b->keyframes[i], &b->keyframes[i + 1],
+				(b->kf_count - i - 1) *
+				sizeof(struct bbox_kf));
+			b->kf_count--;
+			return 0;
+		}
+	}
+	return -1;
+}
+
+void bbox_apply_frame(struct bbox_manager *bm, int frame)
+{
+	int i, j;
+
+	for (i = 0; i < bm->count; i++) {
+		struct bbox *b = &bm->boxes[i];
+		struct bbox_kf *lo, *hi;
+		int dt;
+
+		if (b->kf_count <= 0)
+			continue;
+
+		if (frame <= b->keyframes[0].frame) {
+			b->x = b->keyframes[0].x;
+			b->y = b->keyframes[0].y;
+			b->w = b->keyframes[0].w;
+			b->h = b->keyframes[0].h;
+			continue;
+		}
+		if (frame >= b->keyframes[b->kf_count - 1].frame) {
+			struct bbox_kf *k =
+				&b->keyframes[b->kf_count - 1];
+			b->x = k->x;
+			b->y = k->y;
+			b->w = k->w;
+			b->h = k->h;
+			continue;
+		}
+
+		lo = &b->keyframes[0];
+		hi = &b->keyframes[b->kf_count - 1];
+		for (j = 0; j < b->kf_count - 1; j++) {
+			if (b->keyframes[j].frame <= frame &&
+			    b->keyframes[j + 1].frame >= frame) {
+				lo = &b->keyframes[j];
+				hi = &b->keyframes[j + 1];
+				break;
+			}
+		}
+		dt = hi->frame - lo->frame;
+		if (dt <= 0) {
+			b->x = lo->x;
+			b->y = lo->y;
+			b->w = lo->w;
+			b->h = lo->h;
+		} else {
+			int num = frame - lo->frame;
+
+			b->x = lo->x + (hi->x - lo->x) * num / dt;
+			b->y = lo->y + (hi->y - lo->y) * num / dt;
+			b->w = lo->w + (hi->w - lo->w) * num / dt;
+			b->h = lo->h + (hi->h - lo->h) * num / dt;
+		}
+	}
+}

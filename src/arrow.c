@@ -153,3 +153,127 @@ int arrow_find_near(struct arrow_manager *am, int tx, int ty,
 		return best_idx;
 	return -1;
 }
+
+static struct arrow *arrow_find_by_id(struct arrow_manager *am, int id)
+{
+	int i;
+
+	for (i = 0; i < am->count; i++) {
+		if (am->arrows[i].id == id)
+			return &am->arrows[i];
+	}
+	return NULL;
+}
+
+int arrow_set_keyframe(struct arrow_manager *am, int id, int frame,
+		       struct arrow_point from, struct arrow_point to)
+{
+	struct arrow *a;
+	int i, ins;
+
+	a = arrow_find_by_id(am, id);
+	if (!a)
+		return -1;
+
+	for (i = 0; i < a->kf_count; i++) {
+		if (a->keyframes[i].frame == frame) {
+			a->keyframes[i].from = from;
+			a->keyframes[i].to = to;
+			a->from = from;
+			a->to = to;
+			return 0;
+		}
+		if (a->keyframes[i].frame > frame)
+			break;
+	}
+
+	if (a->kf_count >= ARROW_KF_MAX)
+		return -1;
+	ins = i;
+	memmove(&a->keyframes[ins + 1], &a->keyframes[ins],
+		(a->kf_count - ins) * sizeof(struct arrow_kf));
+	a->keyframes[ins].frame = frame;
+	a->keyframes[ins].from = from;
+	a->keyframes[ins].to = to;
+	a->kf_count++;
+	a->from = from;
+	a->to = to;
+	return 0;
+}
+
+int arrow_remove_keyframe(struct arrow_manager *am, int id, int frame)
+{
+	struct arrow *a;
+	int i;
+
+	a = arrow_find_by_id(am, id);
+	if (!a)
+		return -1;
+	for (i = 0; i < a->kf_count; i++) {
+		if (a->keyframes[i].frame == frame) {
+			memmove(&a->keyframes[i], &a->keyframes[i + 1],
+				(a->kf_count - i - 1) *
+				sizeof(struct arrow_kf));
+			a->kf_count--;
+			return 0;
+		}
+	}
+	return -1;
+}
+
+static int interp_int(int a, int b, int num, int den)
+{
+	if (den <= 0)
+		return a;
+	return a + (b - a) * num / den;
+}
+
+void arrow_apply_frame(struct arrow_manager *am, int frame)
+{
+	int i, j;
+
+	for (i = 0; i < am->count; i++) {
+		struct arrow *a = &am->arrows[i];
+		struct arrow_kf *lo, *hi;
+		int dt, num;
+
+		if (a->kf_count <= 0)
+			continue;
+
+		if (frame <= a->keyframes[0].frame) {
+			a->from = a->keyframes[0].from;
+			a->to = a->keyframes[0].to;
+			continue;
+		}
+		if (frame >= a->keyframes[a->kf_count - 1].frame) {
+			struct arrow_kf *k =
+				&a->keyframes[a->kf_count - 1];
+			a->from = k->from;
+			a->to = k->to;
+			continue;
+		}
+
+		lo = &a->keyframes[0];
+		hi = &a->keyframes[a->kf_count - 1];
+		for (j = 0; j < a->kf_count - 1; j++) {
+			if (a->keyframes[j].frame <= frame &&
+			    a->keyframes[j + 1].frame >= frame) {
+				lo = &a->keyframes[j];
+				hi = &a->keyframes[j + 1];
+				break;
+			}
+		}
+		dt = hi->frame - lo->frame;
+		num = frame - lo->frame;
+		/*
+		 * Interpolate x/y; image_index does not interpolate
+		 * (use lo's image binding).
+		 */
+		a->from.image_index = lo->from.image_index;
+		a->to.image_index = lo->to.image_index;
+		a->from.x = interp_int(lo->from.x, hi->from.x, num, dt);
+		a->from.y = interp_int(lo->from.y, hi->from.y, num, dt);
+		a->to.x = interp_int(lo->to.x, hi->to.x, num, dt);
+		a->to.y = interp_int(lo->to.y, hi->to.y, num, dt);
+	}
+}

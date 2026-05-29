@@ -416,6 +416,12 @@ static void editor_redraw_status_bar_fast(struct editor *ed)
 		snprintf(line2, sizeof(line2),
 			 " Label: %s_  (Enter=ok, ESC=cancel)",
 			 ed->label_buf);
+	} else if (ed->is_video) {
+		snprintf(line2, sizeof(line2),
+			 " video frame %d/%d (fps=%.2f) [</>]step [[/]] +-30 [a]dd [d]el [e]label [s]ave [q]uit",
+			 ed->video.current_frame,
+			 ed->video.total_frames,
+			 ed->video.fps);
 	} else {
 		snprintf(line2, sizeof(line2),
 			 " L=draw R=select [a]dd [d]el [e]label [x]arrow [s]ave [u]ndo [r]edo [q]uit");
@@ -491,6 +497,12 @@ static void editor_do_render(struct editor *ed)
 		snprintf(line2, sizeof(line2),
 			 " Label: %s_  (Enter=ok, ESC=cancel)",
 			 ed->label_buf);
+	} else if (ed->is_video) {
+		snprintf(line2, sizeof(line2),
+			 " video frame %d/%d (fps=%.2f) [</>]step [[/]] +-30 [a]dd [d]el [e]label [s]ave [q]uit",
+			 ed->video.current_frame,
+			 ed->video.total_frames,
+			 ed->video.fps);
 	} else {
 		snprintf(line2, sizeof(line2),
 			 " L=draw R=select [a]dd [d]el [e]label [x]arrow [s]ave [u]ndo [r]edo [q]uit");
@@ -914,6 +926,10 @@ void editor_free(struct editor *ed)
 
 	if (ed->running)
 		editor_stop(ed);
+	if (ed->is_video) {
+		video_close(&ed->video);
+		ed->is_video = 0;
+	}
 	for (i = 0; i < ed->image_count; i++)
 		image_free(&ed->images[i].img);
 	history_free(&ed->history);
@@ -965,6 +981,112 @@ int editor_open_image_base64(struct editor *ed, const char *b64)
 	ed->image_gen++;
 	ed->image_uploaded = 0;
 	ed->render.dirty = 1;
+	return 0;
+}
+
+/*
+ * path_is_video - check filename extension for known video formats
+ */
+int path_is_video(const char *path)
+{
+	const char *ext;
+	const char *exts[] = {
+		".mp4", ".MP4", ".mov", ".MOV", ".mkv", ".MKV",
+		".avi", ".AVI", ".webm", ".WEBM", ".m4v", ".M4V",
+		".flv", ".FLV", ".wmv", ".WMV", ".mpeg", ".MPEG",
+		".mpg", ".MPG", ".ts", ".TS"
+	};
+	size_t i;
+
+	if (!path)
+		return 0;
+	ext = strrchr(path, '.');
+	if (!ext)
+		return 0;
+	for (i = 0; i < sizeof(exts) / sizeof(exts[0]); i++) {
+		if (strcmp(ext, exts[i]) == 0)
+			return 1;
+	}
+	return 0;
+}
+
+int editor_video_seek(struct editor *ed, int frame_num)
+{
+	unsigned char *px;
+	int w, h;
+	struct image *img;
+	size_t sz;
+
+	if (!ed->is_video)
+		return -1;
+	if (frame_num < 0)
+		frame_num = 0;
+	if (ed->video.total_frames > 0 &&
+	    frame_num >= ed->video.total_frames)
+		frame_num = ed->video.total_frames - 1;
+
+	arena_reset(&ed->arenas.arenas[ARENA_FRAME]);
+	px = video_get_frame(&ed->arenas.arenas[ARENA_FRAME],
+			     &ed->video, frame_num, &w, &h);
+	if (!px)
+		return -1;
+
+	img = &ed->images[0].img;
+	sz = (size_t)w * h * 4;
+	if (sz > 64 * 1024 * 1024) {
+		img->pixels = px;
+	} else {
+		img->pixels = arena_alloc(
+			&ed->arenas.arenas[ARENA_IMAGE], sz);
+		if (!img->pixels)
+			return -1;
+		memcpy(img->pixels, px, sz);
+	}
+	img->width = w;
+	img->height = h;
+	img->channels = 4;
+
+	ed->video.current_frame = frame_num;
+	ed->image_count = 1;
+	ed->image_gen++;
+	ed->image_uploaded = 0;
+	ed->render.dirty = 1;
+
+	bbox_apply_frame(&ed->bboxes, frame_num);
+	arrow_apply_frame(&ed->arrows, frame_num);
+	return 0;
+}
+
+int editor_open_video(struct editor *ed, const char *path)
+{
+	int ret;
+
+	if (ed->is_video) {
+		video_close(&ed->video);
+		ed->is_video = 0;
+	}
+
+	arena_reset(&ed->arenas.arenas[ARENA_IMAGE]);
+	arena_reset(&ed->arenas.arenas[ARENA_FRAME]);
+
+	ret = video_open(&ed->arenas.arenas[ARENA_SESSION], path,
+			 &ed->video);
+	if (ret < 0)
+		return ret;
+
+	strncpy(ed->images[0].img.path, path,
+		sizeof(ed->images[0].img.path) - 1);
+	ed->images[0].img.path[
+		sizeof(ed->images[0].img.path) - 1] = '\0';
+	ed->is_video = 1;
+	ed->image_count = 1;
+
+	if (editor_video_seek(ed, 0) < 0) {
+		video_close(&ed->video);
+		ed->is_video = 0;
+		ed->image_count = 0;
+		return -1;
+	}
 	return 0;
 }
 
@@ -1333,6 +1455,7 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 				} else if (ed->arrows.drag_state ==
 					   ARROW_DRAG_FROM_SET) {
 					struct arrow_point from, to;
+					int new_id;
 
 					from = ed->arrows.drag_from;
 					to.image_index = img_idx;
@@ -1341,8 +1464,15 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 
 					editor_push_history(ed,
 							    OP_ADD_ARROW);
-					arrow_add(&ed->arrows, from, to,
-						  NULL, 0);
+					new_id = arrow_add(&ed->arrows,
+							   from, to,
+							   NULL, 0);
+					if (ed->is_video && new_id > 0)
+						arrow_set_keyframe(
+							&ed->arrows,
+							new_id,
+							ed->video.current_frame,
+							from, to);
 					ed->arrows.drag_state =
 						ARROW_DRAG_NONE;
 					ed->mode = MODE_VIEW;
@@ -1381,12 +1511,27 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 				if (ev->key == TB_KEY_MOUSE_RELEASE &&
 				    ed->bboxes.drag_state != DRAG_NONE) {
 					int id;
+					int prev_state =
+						ed->bboxes.drag_state;
 
 					id = bbox_mouse_up(&ed->bboxes);
 					if (id >= 0)
 						ed->mode = MODE_CONFIRM;
 					else
 						ed->mode = MODE_VIEW;
+					if (ed->is_video &&
+					    prev_state != DRAG_CREATE) {
+						struct bbox *sel =
+						  bbox_get_selected(
+						    &ed->bboxes);
+						if (sel)
+							bbox_set_keyframe(
+							  &ed->bboxes,
+							  sel->id,
+							  ed->video.current_frame,
+							  sel->x, sel->y,
+							  sel->w, sel->h);
+					}
 					ed->render.dirty = 1;
 				}
 				return;
@@ -1416,6 +1561,8 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 			} else if (ev->key == TB_KEY_MOUSE_RELEASE) {
 				if (ed->bboxes.drag_state != DRAG_NONE) {
 					int id;
+					int prev_state =
+						ed->bboxes.drag_state;
 
 					id = bbox_mouse_up(&ed->bboxes);
 					if (id >= 0) {
@@ -1429,9 +1576,42 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 							nb->image_index =
 								img_idx;
 						}
+						if (ed->is_video) {
+							struct bbox *nb =
+								&ed->bboxes.boxes[
+								ed->bboxes.count-1];
+							bbox_set_keyframe(
+								&ed->bboxes,
+								id,
+								ed->video.current_frame,
+								nb->x, nb->y,
+								nb->w, nb->h);
+						}
 						editor_enter_label_edit(
 							ed, id, 0, NULL);
 					} else {
+						/*
+						 * Drag-move/resize ended:
+						 * if a bbox is selected and
+						 * we are in video mode,
+						 * snapshot its current
+						 * geometry as a keyframe.
+						 */
+						if (ed->is_video &&
+						    prev_state != DRAG_CREATE) {
+							struct bbox *sel =
+							  bbox_get_selected(
+							    &ed->bboxes);
+							if (sel)
+								bbox_set_keyframe(
+								  &ed->bboxes,
+								  sel->id,
+								  ed->video.current_frame,
+								  sel->x,
+								  sel->y,
+								  sel->w,
+								  sel->h);
+						}
 						ed->mode = MODE_VIEW;
 					}
 					ed->render.dirty = 1;
@@ -1463,12 +1643,36 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 		return;
 	}
 
+	if (ed->is_video) {
+		switch (ev->key) {
+		case TB_KEY_ARROW_LEFT:
+			editor_video_seek(ed,
+					  ed->video.current_frame - 1);
+			return;
+		case TB_KEY_ARROW_RIGHT:
+			editor_video_seek(ed,
+					  ed->video.current_frame + 1);
+			return;
+		}
+		switch (ev->ch) {
+		case '[':
+			editor_video_seek(ed,
+					  ed->video.current_frame - 30);
+			return;
+		case ']':
+			editor_video_seek(ed,
+					  ed->video.current_frame + 30);
+			return;
+		}
+	}
+
 	switch (ev->key) {
 	case 'q':
 		ed->running = 0;
 		return;
 	case 'a': {
 		int bw, bh, bx, by;
+		int new_id;
 
 		if (ed->image_count <= 0)
 			return;
@@ -1477,7 +1681,12 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 		bh = ed->images[0].img.height / 4;
 		bx = ed->images[0].img.width / 2 - bw / 2;
 		by = ed->images[0].img.height / 2 - bh / 2;
-		bbox_add(&ed->bboxes, bx, by, bw, bh, 0, NULL, 0);
+		new_id = bbox_add(&ed->bboxes, bx, by, bw, bh, 0,
+				  NULL, 0);
+		if (ed->is_video && new_id > 0)
+			bbox_set_keyframe(&ed->bboxes, new_id,
+					  ed->video.current_frame,
+					  bx, by, bw, bh);
 		ed->mode = MODE_SELECT;
 		ed->render.dirty = 1;
 		return;
@@ -1520,7 +1729,17 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 
 		if (as) {
 			editor_push_history(ed, OP_REMOVE_ARROW);
-			arrow_remove(&ed->arrows, as->id);
+			if (ed->is_video && as->kf_count > 0) {
+				arrow_remove_keyframe(
+					&ed->arrows, as->id,
+					ed->video.current_frame);
+				/* find again, kf_count may have changed */
+				as = arrow_get_selected(&ed->arrows);
+				if (as && as->kf_count == 0)
+					arrow_remove(&ed->arrows, as->id);
+			} else {
+				arrow_remove(&ed->arrows, as->id);
+			}
 			ed->render.dirty = 1;
 			return;
 		}
@@ -1530,7 +1749,17 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 			if (sel) {
 				editor_push_history(ed,
 						    OP_REMOVE_BBOX);
-				bbox_remove(&ed->bboxes, sel->id);
+				if (ed->is_video && sel->kf_count > 0) {
+					bbox_remove_keyframe(
+						&ed->bboxes, sel->id,
+						ed->video.current_frame);
+					sel = bbox_get_selected(&ed->bboxes);
+					if (sel && sel->kf_count == 0)
+						bbox_remove(&ed->bboxes,
+							    sel->id);
+				} else {
+					bbox_remove(&ed->bboxes, sel->id);
+				}
 				ed->render.dirty = 1;
 			}
 		}
@@ -1599,6 +1828,7 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 			break;
 		case 'a': {
 			int bw, bh, bx, by;
+			int new_id;
 
 			if (ed->image_count <= 0)
 				break;
@@ -1607,8 +1837,12 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 			bh = ed->images[0].img.height / 4;
 			bx = ed->images[0].img.width / 2 - bw / 2;
 			by = ed->images[0].img.height / 2 - bh / 2;
-			bbox_add(&ed->bboxes, bx, by, bw, bh, 0,
-				 NULL, 0);
+			new_id = bbox_add(&ed->bboxes, bx, by, bw, bh, 0,
+					  NULL, 0);
+			if (ed->is_video && new_id > 0)
+				bbox_set_keyframe(&ed->bboxes, new_id,
+						  ed->video.current_frame,
+						  bx, by, bw, bh);
 			ed->mode = MODE_SELECT;
 			ed->render.dirty = 1;
 			break;
@@ -1654,7 +1888,17 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 			if (as) {
 				editor_push_history(ed,
 						    OP_REMOVE_ARROW);
-				arrow_remove(&ed->arrows, as->id);
+				if (ed->is_video && as->kf_count > 0) {
+					arrow_remove_keyframe(
+						&ed->arrows, as->id,
+						ed->video.current_frame);
+					as = arrow_get_selected(&ed->arrows);
+					if (as && as->kf_count == 0)
+						arrow_remove(&ed->arrows,
+							     as->id);
+				} else {
+					arrow_remove(&ed->arrows, as->id);
+				}
 				ed->render.dirty = 1;
 				break;
 			}
@@ -1664,8 +1908,23 @@ void editor_handle_event(struct editor *ed, struct tb_event *ev)
 				if (sel) {
 					editor_push_history(ed,
 							    OP_REMOVE_BBOX);
-					bbox_remove(&ed->bboxes,
-						    sel->id);
+					if (ed->is_video &&
+					    sel->kf_count > 0) {
+						bbox_remove_keyframe(
+							&ed->bboxes,
+							sel->id,
+							ed->video.current_frame);
+						sel = bbox_get_selected(
+							&ed->bboxes);
+						if (sel &&
+						    sel->kf_count == 0)
+							bbox_remove(
+								&ed->bboxes,
+								sel->id);
+					} else {
+						bbox_remove(&ed->bboxes,
+							    sel->id);
+					}
 					ed->render.dirty = 1;
 				}
 			}

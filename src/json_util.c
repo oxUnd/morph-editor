@@ -199,6 +199,27 @@ cJSON *bbox_to_json(struct bbox *bbox)
 	if (bbox->label[0])
 		cJSON_AddStringToObject(obj, "label", bbox->label);
 	cJSON_AddStringToObject(obj, "color", color_to_hex(bbox->color));
+	if (bbox->kf_count > 0) {
+		cJSON *kfs = cJSON_CreateArray();
+		int i;
+
+		for (i = 0; i < bbox->kf_count; i++) {
+			cJSON *k = cJSON_CreateObject();
+
+			cJSON_AddNumberToObject(k, "frame",
+						bbox->keyframes[i].frame);
+			cJSON_AddNumberToObject(k, "x",
+						bbox->keyframes[i].x);
+			cJSON_AddNumberToObject(k, "y",
+						bbox->keyframes[i].y);
+			cJSON_AddNumberToObject(k, "w",
+						bbox->keyframes[i].w);
+			cJSON_AddNumberToObject(k, "h",
+						bbox->keyframes[i].h);
+			cJSON_AddItemToArray(kfs, k);
+		}
+		cJSON_AddItemToObject(obj, "keyframes", kfs);
+	}
 	return obj;
 }
 
@@ -206,6 +227,7 @@ struct bbox bbox_from_json(cJSON *json)
 {
 	struct bbox b;
 	cJSON *tmp;
+	cJSON *kfs;
 
 	memset(&b, 0, sizeof(b));
 	tmp = cJSON_GetObjectItem(json, "id");
@@ -232,6 +254,35 @@ struct bbox bbox_from_json(cJSON *json)
 	tmp = cJSON_GetObjectItem(json, "color");
 	if (tmp && tmp->valuestring)
 		b.color = parse_color(tmp->valuestring);
+	kfs = cJSON_GetObjectItem(json, "keyframes");
+	if (kfs && cJSON_IsArray(kfs)) {
+		cJSON *k;
+		int n = 0;
+
+		cJSON_ArrayForEach(k, kfs) {
+			cJSON *t;
+
+			if (n >= BBOX_KF_MAX)
+				break;
+			t = cJSON_GetObjectItem(k, "frame");
+			if (t)
+				b.keyframes[n].frame = t->valueint;
+			t = cJSON_GetObjectItem(k, "x");
+			if (t)
+				b.keyframes[n].x = t->valueint;
+			t = cJSON_GetObjectItem(k, "y");
+			if (t)
+				b.keyframes[n].y = t->valueint;
+			t = cJSON_GetObjectItem(k, "w");
+			if (t)
+				b.keyframes[n].w = t->valueint;
+			t = cJSON_GetObjectItem(k, "h");
+			if (t)
+				b.keyframes[n].h = t->valueint;
+			n++;
+		}
+		b.kf_count = n;
+	}
 	return b;
 }
 
@@ -282,6 +333,25 @@ cJSON *arrow_to_json(struct arrow *a)
 	if (a->label[0])
 		cJSON_AddStringToObject(obj, "label", a->label);
 	cJSON_AddStringToObject(obj, "color", color_to_hex(a->color));
+	if (a->kf_count > 0) {
+		cJSON *kfs = cJSON_CreateArray();
+		int i;
+
+		for (i = 0; i < a->kf_count; i++) {
+			cJSON *k = cJSON_CreateObject();
+
+			cJSON_AddNumberToObject(k, "frame",
+						a->keyframes[i].frame);
+			cJSON_AddItemToObject(k, "from",
+				arrow_point_to_json(
+					&a->keyframes[i].from));
+			cJSON_AddItemToObject(k, "to",
+				arrow_point_to_json(
+					&a->keyframes[i].to));
+			cJSON_AddItemToArray(kfs, k);
+		}
+		cJSON_AddItemToObject(obj, "keyframes", kfs);
+	}
 	return obj;
 }
 
@@ -290,6 +360,7 @@ struct arrow arrow_from_json(cJSON *json)
 	struct arrow a;
 	cJSON *tmp;
 	cJSON *pt_json;
+	cJSON *kfs;
 
 	memset(&a, 0, sizeof(a));
 	tmp = cJSON_GetObjectItem(json, "id");
@@ -308,5 +379,30 @@ struct arrow arrow_from_json(cJSON *json)
 	tmp = cJSON_GetObjectItem(json, "color");
 	if (tmp && tmp->valuestring)
 		a.color = parse_color(tmp->valuestring);
+	kfs = cJSON_GetObjectItem(json, "keyframes");
+	if (kfs && cJSON_IsArray(kfs)) {
+		cJSON *k;
+		int n = 0;
+
+		cJSON_ArrayForEach(k, kfs) {
+			cJSON *t;
+
+			if (n >= ARROW_KF_MAX)
+				break;
+			t = cJSON_GetObjectItem(k, "frame");
+			if (t)
+				a.keyframes[n].frame = t->valueint;
+			t = cJSON_GetObjectItem(k, "from");
+			if (t)
+				a.keyframes[n].from =
+					arrow_point_from_json(t);
+			t = cJSON_GetObjectItem(k, "to");
+			if (t)
+				a.keyframes[n].to =
+					arrow_point_from_json(t);
+			n++;
+		}
+		a.kf_count = n;
+	}
 	return a;
 }
