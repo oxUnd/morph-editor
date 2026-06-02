@@ -574,11 +574,19 @@ static void editor_do_render(struct editor *ed)
 
 			if (ed->image_count == 1) {
 				struct image_slot *sl = &ed->images[0];
+				char _b[64];
+				int _n;
 				char *img_data = NULL;
 				unsigned char *src_px = sl->img.pixels;
 				int src_w = sl->img.width;
 				int src_h = sl->img.height;
 				int src_ch = sl->img.channels;
+
+				_n = snprintf(_b, sizeof(_b),
+					"\033[%d;%dH",
+					sl->canvas_y + 1,
+					sl->canvas_x + 1);
+				tb_send(_b, _n);
 
 				/*
 				 * Draw arrows directly into a copy of the
