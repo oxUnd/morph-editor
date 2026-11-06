@@ -10,6 +10,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <limits.h>
+#include <unistd.h>
 
 /* ---- coordinate conversion ---- */
 
@@ -111,6 +112,14 @@ void render_init(struct render_state *rs, enum term_proto proto)
 {
 	memset(rs, 0, sizeof(*rs));
 	rs->proto = proto;
+	/*
+	 * Kitty image ids are global to the terminal, not to this
+	 * process. A fixed id (the old value was always 1) makes
+	 * separate editor instances and multiple images overwrite or
+	 * stack on each other. Derive a per-process base and add the
+	 * image slot index to it.
+	 */
+	rs->kitty_image_base = 1 + (int)(getpid() % 100000) * 100;
 	rs->kitty_placement_id = 1;
 	rs->dirty = 1;
 }
@@ -678,7 +687,8 @@ done:
 /* ---- Kitty protocol encoding ---- */
 
 char *render_image_kitty(struct arena *a, const unsigned char *pixels,
-			 int w, int h, int channels, int placement_id,
+			 int w, int h, int channels, int image_id,
+			 int placement_id,
 			 int disp_cols, int disp_rows)
 {
 	unsigned char *png_data;
@@ -692,6 +702,9 @@ char *render_image_kitty(struct arena *a, const unsigned char *pixels,
 	int offset;
 	char header[256];
 	int header_len;
+
+	if (image_id <= 0)
+		image_id = 1;
 
 	png_data = image_save_png_to_buf(pixels, w, h, channels, &png_len);
 	if (!png_data)
@@ -755,9 +768,10 @@ char *render_image_kitty(struct arena *a, const unsigned char *pixels,
 			 * through.
 			 */
 			header_len = snprintf(header, sizeof(header),
-				"\033_Ga=T,f=100,s=%d,v=%d,c=%d,r=%d,z=-1,i=%d,q=2,m=%d;",
+				"\033_Ga=T,f=100,s=%d,v=%d,c=%d,r=%d,z=-1,"
+				"i=%d,p=%d,q=2,m=%d;",
 				w, h, disp_cols, disp_rows,
-				placement_id, m);
+				image_id, placement_id, m);
 		} else {
 			header_len = snprintf(header, sizeof(header),
 				"\033_Gq=2,m=%d;", m);
@@ -858,13 +872,14 @@ void kitty_write(const char *data, int len)
 	tb_send(data, len);
 }
 
-void kitty_delete_placement(int placement_id)
+void kitty_delete_image(int image_id)
 {
 	char buf[64];
 	int len;
 
-	len = snprintf(buf, sizeof(buf), "\033_Ga=d,i=%d,q=2\033\\",
-		       placement_id);
+	len = snprintf(buf, sizeof(buf),
+		       "\033_Ga=d,d=I,i=%d,q=2\033\\",
+		       image_id);
 	tb_send(buf, len);
 }
 

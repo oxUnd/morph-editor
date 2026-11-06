@@ -1,5 +1,21 @@
 # morph-editor 需求文档
 
+## 实现状态（2026-11）
+
+- 已实现：bbox/arrow 统一选中、事务式撤销、标注 JSON 原子读写与
+  自动保存、`--annotations`、`--proto`、视频异步解码 + LRU、
+  execvp 调用 ffmpeg/ffprobe、headless bbox 校验/裁剪、
+  composite、diff_bboxes、帮助浮层/方向键微调/标签光标/侧栏滚动、
+  ASan/UBSan 构建选项与 CI。
+- 未实现：JSON-RPC `--serve`（README 已明确标注不支持）；
+  缩放/平移、多选、数值坐标输入。
+- 依赖修正：不再依赖 libuv；视频使用 pthread 后台线程。
+- 内存规则例外：cJSON/stb/history/video 等有独立生命周期的对象
+  仍使用 malloc/free；arena 规则保留给图像/命令缓冲。
+- 测试：`ctest` 12 项；`test_headless` 覆盖边界裁剪/composite/diff，
+  `test_editor` 覆盖选中/撤销/多图/持久化/光标/微调，
+  `test_video` 使用真实 ffmpeg 验证异步加载。
+
 ## 1. 项目概述
 
 基于 termbox2 + stb + libuv 的终端图片/视频标注编辑器，面向 LLM Agent 工具调用场景。

@@ -12,11 +12,17 @@ static int query_kitty_support(void)
 	env = getenv("KITTY_WINDOW_ID");
 	if (env && env[0])
 		return 1;
+	env = getenv("WEZTERM_EXECUTABLE");
+	if (env && env[0])
+		return 1;
 	env = getenv("TERM");
-	if (env && strstr(env, "kitty"))
+	if (env && (strstr(env, "kitty") || strstr(env, "wezterm") ||
+		    strstr(env, "ghostty")))
 		return 1;
 	env = getenv("TERM_PROGRAM");
-	if (env && strcmp(env, "kitty") == 0)
+	if (env && (strcmp(env, "kitty") == 0 ||
+		    strcmp(env, "WezTerm") == 0 ||
+		    strcmp(env, "ghostty") == 0))
 		return 1;
 	/*
 	 * iTerm2 3.5+ implements the Kitty graphics protocol,
@@ -77,6 +83,12 @@ static int query_sixel_support(void)
 		return 1;
 	env = getenv("TERM_PROGRAM");
 	if (env && strcmp(env, "mlterm") == 0)
+		return 1;
+	env = getenv("KONSOLE_VERSION");
+	if (env && env[0])
+		return 1;
+	env = getenv("TERM");
+	if (env && (strstr(env, "foot") || strstr(env, "konsole")))
 		return 1;
 	return 0;
 }

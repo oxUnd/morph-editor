@@ -20,6 +20,7 @@ struct render_state {
 	int offset_x;
 	int offset_y;
 	float scale;
+	int kitty_image_base;
 	int kitty_placement_id;
 	int dirty;
 	int sidebar_w;
@@ -48,7 +49,8 @@ char *render_image_sixel(struct arena *a, const unsigned char *pixels,
 			 int w, int h, int channels);
 
 char *render_image_kitty(struct arena *a, const unsigned char *pixels,
-			 int w, int h, int channels, int placement_id,
+			 int w, int h, int channels, int image_id,
+			 int placement_id,
 			 int disp_cols, int disp_rows);
 
 char *render_image_iterm2(struct arena *a, const unsigned char *pixels,
@@ -75,6 +77,6 @@ void clear_screen(void);
 void move_cursor(int row, int col);
 void sixel_write(const char *data, int len);
 void kitty_write(const char *data, int len);
-void kitty_delete_placement(int placement_id);
+void kitty_delete_image(int image_id);
 
 #endif /* MORPH_EDITOR_RENDER_H */

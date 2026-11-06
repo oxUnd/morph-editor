@@ -33,7 +33,8 @@ static void print_usage(void)
 	       "  --output-base64       Output base64 to stdout\n"
 	       "  --base64              Input from stdin as base64\n"
 	       "  --no-tui              Non-interactive mode\n"
-	       "  --serve               JSON-RPC server mode\n"
+	       "  --annotations <path>  Load/save annotations\n"
+	       "  --proto <name>        auto|kitty|sixel|iterm2\n"
 	       "  --log <path>          Log to file\n"
 	       "  --verbose             Verbose logging\n");
 }
@@ -112,6 +113,18 @@ int main(int argc, char **argv)
 		} else if (strcmp(arg, "--circle") == 0) {
 			args.draw_type = "circle";
 			args.draw_params = shift_arg(&argc, &argv);
+		} else if (strcmp(arg, "--filled-circle") == 0) {
+			args.draw_type = "filled_circle";
+			args.draw_params = shift_arg(&argc, &argv);
+		} else if (strcmp(arg, "--filled-rect") == 0) {
+			args.draw_type = "filled_rect";
+			args.draw_params = shift_arg(&argc, &argv);
+		} else if (strcmp(arg, "--line") == 0) {
+			args.draw_type = "line";
+			args.draw_params = shift_arg(&argc, &argv);
+		} else if (strcmp(arg, "--fill") == 0) {
+			args.draw_type = "fill";
+			args.draw_params = shift_arg(&argc, &argv);
 		} else if (strcmp(arg, "--resize") == 0) {
 			args.transform_str = "resize:";
 			{
@@ -178,6 +191,43 @@ int main(int argc, char **argv)
 			args.format = shift_arg(&argc, &argv);
 		} else if (strcmp(arg, "--canvas") == 0) {
 			args.composite_str = shift_arg(&argc, &argv);
+		} else if (strcmp(arg, "--place") == 0) {
+			args.pending_place = shift_arg(&argc, &argv);
+			if (!args.pending_place) {
+				fprintf(stderr,
+					"error: --place needs a path\n");
+				return 1;
+			}
+		} else if (strcmp(arg, "--at") == 0) {
+			char *val;
+			int px, py;
+
+			val = shift_arg(&argc, &argv);
+			if (!args.pending_place || !val) {
+				fprintf(stderr,
+					"error: --at must follow --place\n");
+				return 1;
+			}
+			if (sscanf(val, "%d,%d", &px, &py) != 2) {
+				fprintf(stderr,
+					"error: --at must be x,y\n");
+				return 1;
+			}
+			if (args.placement_count >= MAX_PLACEMENTS) {
+				fprintf(stderr,
+					"error: too many placements\n");
+				return 1;
+			}
+			args.placements[args.placement_count].path =
+				args.pending_place;
+			args.placements[args.placement_count].x = px;
+			args.placements[args.placement_count].y = py;
+			args.placement_count++;
+			args.pending_place = NULL;
+		} else if (strcmp(arg, "--annotations") == 0) {
+			args.annotations = shift_arg(&argc, &argv);
+		} else if (strcmp(arg, "--proto") == 0) {
+			args.proto = shift_arg(&argc, &argv);
 		} else if (!args.path) {
 			args.path = arg;
 			if (strcmp(command, "open") == 0 &&
@@ -255,12 +305,31 @@ int main(int argc, char **argv)
 				return 1;
 			}
 		}
-		ret = editor_run(&ed);
+			if (args.annotations) {
+				editor_set_annotation_path(
+					&ed, args.annotations);
+				if (editor_load_annotations(
+					    &ed, args.annotations) < 0)
+					fprintf(stderr,
+						"warning: cannot load %s\n",
+						args.annotations);
+			}
+			if (args.proto &&
+			    editor_set_proto(&ed, args.proto) < 0) {
+				fprintf(stderr,
+					"error: invalid --proto %s "
+					"(auto|kitty|sixel|iterm2)\n",
+					args.proto);
+				editor_free(&ed);
+				arena_set_free(&arenas);
+				log_close();
+				return 1;
+			}
+			ret = editor_run(&ed);
 		editor_free(&ed);
 	} else if (serve_mode) {
-		/* JSON-RPC server mode - Phase 2 */
-		fprintf(stderr, "JSON-RPC server mode not yet "
-				"implemented\n");
+		fprintf(stderr, "error: --serve is not implemented; "
+				"use the CLI or --annotations\n");
 		ret = 1;
 	} else {
 		/* Headless mode */

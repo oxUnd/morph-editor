@@ -5,6 +5,13 @@
 #include "bbox.h"
 #include "layout.h"
 
+#define MAX_PLACEMENTS 16
+
+struct composite_placement {
+	char *path;
+	int x, y;
+};
+
 struct headless_args {
 	char *path;
 	char *paths[MAX_IMAGES];
@@ -23,6 +30,11 @@ struct headless_args {
 	int crop;
 	char *composite_str;
 	char *diff_path;
+	struct composite_placement placements[MAX_PLACEMENTS];
+	int placement_count;
+	char *pending_place;
+	char *annotations;
+	char *proto;
 };
 
 /*
@@ -82,6 +94,6 @@ int headless_convert(struct arena *a, const char *path,
  * headless_diff - compare two images
  */
 int headless_diff(struct arena *a, const char *path1, const char *path2,
-		  int output_base64);
+		  struct headless_args *args);
 
 #endif /* MORPH_EDITOR_HEADLESS_H */
